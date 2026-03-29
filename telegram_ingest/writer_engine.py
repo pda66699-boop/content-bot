@@ -1191,6 +1191,7 @@ def generate_drafts(
                     "date": row.get("date"),
                     "primary_theme": row.get("primary_theme"),
                     "title_hook": row.get("title_hook"),
+                    "body_text": row.get("body_text"),
                 }
                 for row in context.style_references
             ],

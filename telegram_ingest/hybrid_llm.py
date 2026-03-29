@@ -3,10 +3,23 @@ from __future__ import annotations
 import json
 import logging
 
+from .config import PROMPTS_DIR
 from .llm_client import complete_json, complete_json_with_web_search, llm_available
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _load_writer_prompt() -> str:
+    path = PROMPTS_DIR / "writer.md"
+    if path.exists():
+        return path.read_text(encoding="utf-8")
+    return (
+        "Ты пишешь Telegram-пост в стиле Дениса Педченко. "
+        "Нужен живой экспертный текст, не шаблон. Одна мысль на пост. "
+        "Сначала управленческая проблема, потом системная причина, потом практический вывод. "
+        "Не используй инфобизнес-клише. Верни только JSON."
+    )
 
 
 def maybe_generate_planner_candidates(payload: dict) -> list[dict] | None:
@@ -63,19 +76,27 @@ def maybe_generate_writer_drafts(payload: dict, count: int = 2) -> list[dict] | 
     if not llm_available():
         return None
 
-    system_prompt = (
-        "Ты пишешь Telegram-пост в стиле Дениса Педченко. "
-        "Нужен живой экспертный текст, а не шаблон. "
-        "Одна мысль на пост. Сначала управленческая проблема, потом системная причина, потом практический вывод. "
-        "Не используй инфобизнес-клише. Верни только JSON."
-    )
+    system_prompt = _load_writer_prompt()
+
+    # Передаём полный текст style_references, а не только заголовки
+    style_refs_raw = payload.get("style_references") or []
+    style_refs_full = []
+    for ref in style_refs_raw[:5]:  # не более 5 чтобы не раздувать контекст
+        entry: dict = {"date": ref.get("date"), "theme": ref.get("primary_theme")}
+        if ref.get("body_text"):
+            entry["full_text"] = ref["body_text"]
+        elif ref.get("title_hook"):
+            entry["hook"] = ref["title_hook"]
+        style_refs_full.append(entry)
+
     user_prompt = json.dumps(
         {
-            "task": f"Сделай {count} разных черновика поста на одну тему. Каждый черновик должен заметно отличаться по заходу и ритму.",
+            "task": f"Сделай {count} разных черновика поста на одну тему. Каждый черновик должен заметно отличаться по заходу и ритму. Строго следуй правилам стиля из системного промпта.",
             "required_output_format": {
                 "drafts": [
                     {
-                        "text": "полный текст поста, 150-350 слов",
+                        "text": "полный текст поста, 900-1500 символов",
+                        "hook_type": "тип хука: negation|observation|paradox|personal",
                     }
                 ]
             },
@@ -84,10 +105,12 @@ def maybe_generate_writer_drafts(payload: dict, count: int = 2) -> list[dict] | 
             "goal": payload.get("goal"),
             "content_role": payload.get("content_role"),
             "cta_policy": payload.get("cta_policy"),
-            "style_references": payload.get("style_references"),
+            "style_references": style_refs_full,
             "knowledge_core_notes": payload.get("knowledge_core_notes"),
             "avoid_phrases": payload.get("avoid_phrases"),
             "editorial_feedback": payload.get("editorial_feedback"),
+            "case_context": payload.get("case_context"),
+            "topic_brief": payload.get("topic_brief"),
         },
         ensure_ascii=False,
     )

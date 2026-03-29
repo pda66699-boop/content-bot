@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+PROMPTS_DIR = ROOT / "prompts"
 SOURCE_MEMORY_DIR = ROOT / "memory"
 MEMORY_DIR = Path(os.environ.get("CONTENT_BOT_MEMORY_DIR", SOURCE_MEMORY_DIR)).expanduser()
 SQLITE_PATH = MEMORY_DIR / "telegram_ingest.sqlite3"
