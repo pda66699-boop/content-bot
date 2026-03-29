@@ -1,0 +1,21 @@
+[Unit]
+Description=Content Bot Telegram polling service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__SERVICE_USER__
+Group=__SERVICE_USER__
+WorkingDirectory=/opt/content-bot/app
+Environment=PYTHONPATH=/opt/content-bot/app
+Environment=CONTENT_BOT_MEMORY_DIR=/opt/content-bot/data/memory
+EnvironmentFile=/opt/content-bot/shared/content-bot.env
+ExecStartPre=/usr/bin/env python3 /opt/content-bot/app/deploy/bootstrap_memory.py
+ExecStart=/usr/bin/env python3 /opt/content-bot/app/scripts/run_telegram_polling.py
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,17 @@
+{
+  "emoji_policy": "moderate",
+  "max_emojis_per_post": 10,
+  "min_emojis_per_post": 2,
+  "expert_min_emojis_per_post": 2,
+  "expert_max_emojis_per_post": 4,
+  "money_min_emojis_per_post": 2,
+  "money_max_emojis_per_post": 6,
+  "conversational_min_emojis_per_post": 2,
+  "conversational_max_emojis_per_post": 4,
+  "image_min_emojis_per_post": 1,
+  "image_max_emojis_per_post": 3,
+  "paragraph_terminal_period_keep_ratio": 0.15,
+  "prefer_single_focus": true,
+  "prefer_direct_topic_fidelity": true,
+  "telegram_reply_mode": "full"
+}

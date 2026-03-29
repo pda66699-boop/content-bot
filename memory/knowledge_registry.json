@@ -1,0 +1,13 @@
+{
+  "active_version": "v1.1",
+  "versions": {
+    "v1": {
+      "label": "Initial positioning base",
+      "notes": "Built from 00-07 files and Telegram export as of 2026-03-13."
+    },
+    "v1.1": {
+      "label": "Positioning snapshot with 45-day flagship and adizes funnel entry",
+      "notes": "Built from current positioning docs, audience analysis, 45-day offer, and adizesbizbot funnel logic."
+    }
+  }
+}

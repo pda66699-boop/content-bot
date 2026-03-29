@@ -1,0 +1,212 @@
+from __future__ import annotations
+
+import json
+
+from .llm_client import complete_json, complete_json_with_web_search, llm_available
+
+
+def maybe_generate_planner_candidates(payload: dict) -> list[dict] | None:
+    if not llm_available():
+        return None
+
+    system_prompt = (
+        "Ты контент-стратег Дениса Педченко. Придумывай темы и углы для Telegram-канала, "
+        "но не ломай методологию: управляемость, архитектура бизнеса, роли, процессы, системные причины. "
+        "ИИ допустим только как инструмент внутри системы. Верни только JSON."
+    )
+    user_prompt = json.dumps(
+        {
+            "task": "Предложи до 5 тем для следующего окна ленты. Можно улучшать текущие rule-based темы и добавлять новые, но без повторов и без инфостиля.",
+            "business_goal": payload.get("business_goal"),
+            "campaign_mode": payload.get("campaign_mode"),
+            "flagship_offer": payload.get("flagship_offer"),
+            "content_balance_ranges": payload.get("content_balance_ranges"),
+            "cta_matrix_overview": payload.get("cta_matrix_overview"),
+            "current_feed_state": payload.get("current_feed_state"),
+            "recent_topics_closed": payload.get("recent_topics_closed"),
+            "avoid_now": payload.get("avoid_now"),
+            "open_loops": payload.get("open_loops"),
+            "rule_based_candidates": payload.get("best_next_topics"),
+            "user_theme_verdict": payload.get("user_theme_verdict"),
+        },
+        ensure_ascii=False,
+    )
+    response = complete_json(system_prompt, user_prompt, temperature=0.9)
+    if not response:
+        return None
+    candidates = response.get("best_next_topics")
+    if not isinstance(candidates, list):
+        return None
+    return [item for item in candidates if isinstance(item, dict)]
+
+
+def maybe_generate_writer_drafts(payload: dict, count: int = 2) -> list[dict] | None:
+    if not llm_available():
+        return None
+
+    system_prompt = (
+        "Ты пишешь Telegram-пост в стиле Дениса Педченко. "
+        "Нужен живой экспертный текст, а не шаблон. "
+        "Одна мысль на пост. Сначала управленческая проблема, потом системная причина, потом практический вывод. "
+        "Не используй инфобизнес-клише. Верни только JSON."
+    )
+    user_prompt = json.dumps(
+        {
+            "task": f"Сделай {count} разных черновика поста на одну тему. Каждый черновик должен заметно отличаться по заходу и ритму.",
+            "selected_topic": payload.get("selected_topic"),
+            "angle": payload.get("angle"),
+            "goal": payload.get("goal"),
+            "content_role": payload.get("content_role"),
+            "cta_policy": payload.get("cta_policy"),
+            "style_references": payload.get("style_references"),
+            "knowledge_core_notes": payload.get("knowledge_core_notes"),
+            "avoid_phrases": payload.get("avoid_phrases"),
+            "editorial_feedback": payload.get("editorial_feedback"),
+        },
+        ensure_ascii=False,
+    )
+    response = complete_json(system_prompt, user_prompt, temperature=0.95)
+    if not response:
+        return None
+    drafts = response.get("drafts")
+    if not isinstance(drafts, list):
+        return None
+    cleaned: list[dict] = []
+    for item in drafts:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        cleaned.append({"text": text.strip()})
+    return cleaned or None
+
+
+def maybe_generate_rewrite(source_text: str, theme: str, rewrite_plan: dict | None = None) -> dict | None:
+    if not llm_available():
+        return None
+
+    system_prompt = (
+        "Ты делаешь рерайт чужого Telegram-поста под стиль Дениса Педченко. "
+        "Нельзя копировать фразы. Нужно сохранить центральный смысл, но собрать текст заново через управленческую логику, системную причину и практический вывод. "
+        "Если передан rewrite_plan, ты обязан следовать ему: смещать тезис, угол, формат и роль текста, а не только перефразировать формулировки. "
+        "Верни только JSON."
+    )
+    user_prompt = json.dumps(
+        {
+            "task": "Сохрани смысл исходного поста, но перепиши его в более системной, спокойной, деловой манере с учётом rewrite plan.",
+            "detected_theme": theme,
+            "source_post": source_text,
+            "rewrite_plan": rewrite_plan,
+        },
+        ensure_ascii=False,
+    )
+    response = complete_json(system_prompt, user_prompt, temperature=0.9)
+    if not response:
+        return None
+    rewritten = response.get("rewritten_text")
+    if not isinstance(rewritten, str) or not rewritten.strip():
+        return None
+    return {"rewritten_text": rewritten.strip()}
+
+
+def maybe_research_case_topics(payload: dict) -> list[dict] | None:
+    if not llm_available():
+        return None
+
+    system_prompt = (
+        "Ты исследователь бизнес-кейсов для Telegram-канала Дениса Педченко. "
+        "Ищи только кейсы, которые прямо подтверждают пользу системного подхода: "
+        "сокращение потерь, пересборка процессов, контроль, автоматизация, стандарты, операционная эффективность, управляемость. "
+        "Не предлагай кейсы, если там нет явной системной перестройки или измеримого эффекта. "
+        "Исключай истории только про маркетинг, ребрендинг, хайп, личный бренд или общую мотивацию. "
+        "Нужен факт-чекинг по источникам. "
+        "Для каждого кейса ОБЯЗАТЕЛЬНО верни непустые поля: title, post_theme, post_angle, what_is_confirmed, system_changes, measurable_outcomes, sources. "
+        "В sources верни массив объектов вида {title, url}. Не возвращай кейс без источников. "
+        "Если точных цифр нет, всё равно верни качественно подтверждённый эффект и 1-3 источника. Верни только JSON."
+    )
+    user_prompt = json.dumps(
+        {
+            "task": "Найди до 5 реальных и проверяемых бизнес-кейсов под тему канала. Для каждого кейса сразу предложи, какой пост можно из него сделать.",
+            "research_query": payload.get("query"),
+            "positioning_flags": payload.get("positioning_flags"),
+            "exclude_signatures": payload.get("exclude_signatures"),
+            "required_case_schema": {
+                "title": "краткое название кейса",
+                "company": "компания или бренд",
+                "timeframe": "период, если известен",
+                "what_broke": "какая была проблема",
+                "what_is_confirmed": ["1-3 подтверждённых факта"],
+                "system_changes": ["1-4 системных изменения"],
+                "measurable_outcomes": ["1-4 результата или эффекта"],
+                "why_fit": "почему кейс подходит под позиционирование канала",
+                "post_theme": "какую тему поста из этого делать",
+                "post_angle": "под каким углом разбирать кейс",
+                "sources": [
+                    {
+                        "title": "название источника",
+                        "url": "https://..."
+                    }
+                ],
+            },
+            "required_filters": [
+                "явная польза от системного подхода",
+                "сокращение потерь / рост эффективности / оптимизация / контроль / автоматизация / стандарты",
+                "измеримый результат или качественно подтверждённый операционный эффект",
+                "минимум 1 источник всегда, минимум 2 источника если есть цифры",
+            ],
+            "exclude": [
+                "маркетинговые истории без процессной пересборки",
+                "просто вдохновляющие истории без управленческой конкретики",
+                "кейсы, которые нельзя связать с управляемостью бизнеса",
+            ],
+            "important": [
+                "не возвращай пустые массивы sources",
+                "не ограничивайся одними заголовками компаний",
+                "если нет точных чисел, заполни качественно подтверждённый эффект",
+                "если источник один, всё равно верни кейс, но с осторожной подачей",
+            ],
+        },
+        ensure_ascii=False,
+    )
+    response = complete_json_with_web_search(system_prompt, user_prompt, temperature=0.25)
+    if not response:
+        return None
+    cases = response.get("cases")
+    if not isinstance(cases, list):
+        return None
+    return [item for item in cases if isinstance(item, dict)]
+
+
+def maybe_verify_case(payload: dict) -> dict | None:
+    if not llm_available():
+        return None
+
+    system_prompt = (
+        "Ты проверяешь конкретный бизнес-кейс для Telegram-канала Дениса Педченко. "
+        "Тебе нужно отделить подтверждённые факты от легенды, понять, был ли там реальный системный сдвиг, "
+        "и оценить, подходит ли этот кейс под позиционирование: управляемость, процессы, контроль, автоматизация, сокращение потерь и операционная эффективность. "
+        "Если кейс в основном про маркетинг, личный бренд, продуктовый хайп или вдохновляющую историю без системной пересборки, отбрасывай его. "
+        "Верни только JSON."
+    )
+    user_prompt = json.dumps(
+        {
+            "task": "Проверь конкретный кейс и скажи, стоит ли делать по нему пост.",
+            "case_query": payload.get("query"),
+            "positioning_flags": payload.get("positioning_flags"),
+            "required_output": [
+                "what_is_confirmed",
+                "what_is_unclear_or_weak",
+                "system_changes",
+                "measurable_outcomes",
+                "fit_verdict",
+                "fit_reason",
+                "post_theme",
+                "post_angle",
+                "sources",
+            ],
+        },
+        ensure_ascii=False,
+    )
+    response = complete_json_with_web_search(system_prompt, user_prompt, temperature=0.2)
+    return response if isinstance(response, dict) else None

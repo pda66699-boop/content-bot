@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# Secrets & env
+.env
+*.env
+shared/
+
+# Runtime memory (не трогаем данные сервера)
+memory/telegram_ingest.sqlite3
+memory/telegram_polling_offset.json
+memory/telegram_ui_state.json
+memory/raw_updates/
+memory/editorial_feedback_log.jsonl
+
+# OS
+.DS_Store

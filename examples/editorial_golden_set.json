@@ -1,0 +1,21 @@
+[
+  {
+    "kind": "topic",
+    "topic": "оргструктура и роли",
+    "expected": {
+      "content_goal": "expert",
+      "format_type": "expert"
+    }
+  },
+  {
+    "kind": "topic",
+    "topic": "скрытые потери в операционке",
+    "expected": {
+      "business_dimensions": [
+        "операционка",
+        "финансы"
+      ],
+      "novelty_status": "fresh"
+    }
+  }
+]

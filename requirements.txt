@@ -1,0 +1,16 @@
+# Python >= 3.11 required (uses match statements, Self type, tomllib, etc.)
+# No third-party dependencies — project uses stdlib only:
+#   json, sqlite3, urllib, threading, logging, pathlib, dataclasses, re, hashlib, html
+#
+# To run:
+#   python -m scripts.run_telegram_polling
+#   python -m scripts.run_telegram_webhook_server
+#
+# Required environment variables:
+#   TELEGRAM_BOT_TOKEN          — Telegram bot API token (required)
+#   TELEGRAM_WEBHOOK_SECRET     — Secret for webhook signature validation (required for webhook mode)
+#   TELEGRAM_ALLOWED_USER_IDS   — Comma-separated list of allowed Telegram user IDs
+#   OPENAI_API_KEY              — OpenAI API key (required when CONTENT_BOT_LLM_MODE != off)
+#   CONTENT_BOT_LLM_MODE        — off | hybrid | on  (default: off)
+#   CONTENT_BOT_LLM_MODEL       — OpenAI model name (default: gpt-5-mini)
+#   CONTENT_BOT_MEMORY_DIR      — Path to memory/data directory (optional, default: ./memory)
