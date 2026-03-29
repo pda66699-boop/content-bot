@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from .llm_client import complete_json, complete_json_with_web_search, llm_available
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def maybe_generate_planner_candidates(payload: dict) -> list[dict] | None:
@@ -17,6 +21,18 @@ def maybe_generate_planner_candidates(payload: dict) -> list[dict] | None:
     user_prompt = json.dumps(
         {
             "task": "Предложи до 5 тем для следующего окна ленты. Можно улучшать текущие rule-based темы и добавлять новые, но без повторов и без инфостиля.",
+            "required_output_format": {
+                "best_next_topics": [
+                    {
+                        "theme": "название темы",
+                        "angle": "угол подачи",
+                        "content_role": "diagnostic|educational|trust",
+                        "funnel_stage": "problem-aware|solution-aware|aware",
+                        "novelty_rationale": "почему тема сейчас свежа",
+                        "cta_suggestion": "optional|soft|none",
+                    }
+                ]
+            },
             "business_goal": payload.get("business_goal"),
             "campaign_mode": payload.get("campaign_mode"),
             "flagship_offer": payload.get("flagship_offer"),
@@ -33,10 +49,13 @@ def maybe_generate_planner_candidates(payload: dict) -> list[dict] | None:
     )
     response = complete_json(system_prompt, user_prompt, temperature=0.9)
     if not response:
+        LOGGER.warning("planner_candidates: LLM returned None")
         return None
     candidates = response.get("best_next_topics")
     if not isinstance(candidates, list):
+        LOGGER.warning("planner_candidates: LLM response missing 'best_next_topics', got keys=%s", list(response.keys()))
         return None
+    LOGGER.info("planner_candidates: LLM returned %d candidate(s)", len(candidates))
     return [item for item in candidates if isinstance(item, dict)]
 
 
@@ -53,6 +72,13 @@ def maybe_generate_writer_drafts(payload: dict, count: int = 2) -> list[dict] | 
     user_prompt = json.dumps(
         {
             "task": f"Сделай {count} разных черновика поста на одну тему. Каждый черновик должен заметно отличаться по заходу и ритму.",
+            "required_output_format": {
+                "drafts": [
+                    {
+                        "text": "полный текст поста, 150-350 слов",
+                    }
+                ]
+            },
             "selected_topic": payload.get("selected_topic"),
             "angle": payload.get("angle"),
             "goal": payload.get("goal"),
@@ -67,10 +93,13 @@ def maybe_generate_writer_drafts(payload: dict, count: int = 2) -> list[dict] | 
     )
     response = complete_json(system_prompt, user_prompt, temperature=0.95)
     if not response:
+        LOGGER.warning("writer_drafts: LLM returned None")
         return None
     drafts = response.get("drafts")
     if not isinstance(drafts, list):
+        LOGGER.warning("writer_drafts: LLM response missing 'drafts' list, got keys=%s", list(response.keys()))
         return None
+    LOGGER.info("writer_drafts: LLM returned %d draft(s)", len(drafts))
     cleaned: list[dict] = []
     for item in drafts:
         if not isinstance(item, dict):
@@ -95,6 +124,9 @@ def maybe_generate_rewrite(source_text: str, theme: str, rewrite_plan: dict | No
     user_prompt = json.dumps(
         {
             "task": "Сохрани смысл исходного поста, но перепиши его в более системной, спокойной, деловой манере с учётом rewrite plan.",
+            "required_output_format": {
+                "rewritten_text": "полный переписанный текст поста"
+            },
             "detected_theme": theme,
             "source_post": source_text,
             "rewrite_plan": rewrite_plan,
