@@ -1214,7 +1214,7 @@ def generate_drafts(
             llm_text = strip_emojis_if_needed(llm_text, context.user_preferences)
             drafts.append(
                 {
-                    "variant": 100 + idx,
+                    "variant": idx,
                     "theme": context.theme,
                     "angle": context.angle,
                     "content_role": context.content_role,
@@ -1234,6 +1234,30 @@ def generate_drafts(
                     "text": llm_text,
                 }
             )
+
+    # Rule-based drafts are fallback only — skip when LLM produced results
+    if llm_drafts:
+        return {
+            "selected_theme": context.theme,
+            "selected_angle": context.angle,
+            "positioning_flags": context.positioning_flags,
+            "style_profile": context.style_profile,
+            "user_preferences": context.user_preferences,
+            "why_now": context.why_now,
+            "preferred_cta_mode": context.preferred_cta_mode,
+            "case_context": context.case_context,
+            "user_theme_verdict": context.user_theme_verdict,
+            "style_references": [
+                {
+                    "post_id": row.get("post_id"),
+                    "date": row.get("date"),
+                    "title_hook": row.get("title_hook"),
+                    "primary_theme": row.get("primary_theme"),
+                }
+                for row in context.style_references
+            ],
+            "drafts": drafts,
+        }
 
     for variant in range(count):
         if context.post_format == "reflective":
