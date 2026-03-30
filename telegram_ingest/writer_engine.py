@@ -1197,6 +1197,7 @@ def generate_drafts(
             ],
             "knowledge_core_notes": context.terminology_registry,
             "avoid_phrases": context.stop_words,
+            "voice_profile": context.style_profile,
             "editorial_feedback": context.editorial_feedback,
             "case_context": context.case_context,
             "topic_brief": topic_brief,

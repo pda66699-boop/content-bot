@@ -108,6 +108,7 @@ def maybe_generate_writer_drafts(payload: dict, count: int = 2) -> list[dict] | 
             "style_references": style_refs_full,
             "knowledge_core_notes": payload.get("knowledge_core_notes"),
             "avoid_phrases": payload.get("avoid_phrases"),
+            "voice_profile": payload.get("voice_profile"),
             "editorial_feedback": payload.get("editorial_feedback"),
             "case_context": payload.get("case_context"),
             "topic_brief": payload.get("topic_brief"),
