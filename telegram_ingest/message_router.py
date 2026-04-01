@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import html
 import logging
 import os
+import re
 from collections import Counter
+from datetime import datetime, timezone
 
 from .backlog_memory import (
     add_themes_to_backlog,
@@ -25,11 +28,14 @@ from .command_interface import (
     parse_post_command,
 )
 from .critic_engine import critic_review
+from .editorial_extractor import infer_editorial_metadata_from_post
+from .memory_sync import upsert_post_record
 from .open_loops import get_high_priority_open_loops, get_open_loops_chronological
 from .planner_engine import classify_post_pillar, contains_ai_signal, load_posts, plan_next_topics
 from .polish_engine import polish_text
 from .positioning import resolve_cta_strategy
 from .rewrite_engine import build_rewrite_plan_from_improvement, rewrite_post_by_improvement, rewrite_post_in_author_style
+from .store import upsert_published_post
 from .ui import (
     BUTTON_ANALYTICS,
     BUTTON_BACK_TO_MENU,
@@ -87,6 +93,7 @@ from .ui import (
 
 MAX_MESSAGE_LEN = 3800
 LOGGER = logging.getLogger(__name__)
+HASHTAG_RE = re.compile(r"#([A-Za-zА-Яа-я0-9_]+)")
 
 RUBRIC_LABELS = {
     "case": "Кейс",
@@ -233,6 +240,82 @@ def format_rich_text(text: str) -> str:
             continue
         rendered.append(html.escape(section))
     return "\n\n".join(rendered)
+
+
+def infer_cta_target_from_text(lower: str) -> str | None:
+    if "@pda33" in lower:
+        return "personal_dm"
+    if "диагност" in lower or "@adizesbizbot" in lower:
+        return "diagnostic"
+    if "комментар" in lower:
+        return "comments"
+    if "бот" in lower:
+        return "bot"
+    return None
+
+
+def persist_accepted_post_from_session(chat_id: int | str, user_id: int | None, session: dict) -> dict | None:
+    last_generated = session.get("last_generated") or {}
+    final_text = (last_generated.get("final_text") or "").strip()
+    if not final_text:
+        return None
+
+    normalized_summary = " ".join(final_text.split())
+    published_at = datetime.now(timezone.utc).isoformat()
+    date_part = published_at[:10]
+    time_part = published_at[11:16]
+    title_hook = next((line.strip() for line in final_text.splitlines() if line.strip()), normalized_summary[:120])
+    lower = normalized_summary.lower()
+    hashtags = HASHTAG_RE.findall(final_text)
+    cta_present = any(token in lower for token in ("@pda33", "@adizesbizbot", "диагност", "комментар", "напиши", "напишите", "бот"))
+    mentions_ai = any(token in lower for token in ("ии", " ai ", "gpt", "chatgpt", "нейро"))
+    topic_brief = last_generated.get("topic_brief") or {}
+    theme = (last_generated.get("theme") or topic_brief.get("theme") or title_hook).strip()
+
+    digest = hashlib.md5(final_text.encode("utf-8")).hexdigest()
+    synthetic_message_id = -int(digest[:8], 16)
+    base_card = {
+        "post_id": f"accepted_{chat_id}_{user_id or 'unknown'}_{digest[:12]}",
+        "telegram_chat_id": str(chat_id),
+        "telegram_message_id": synthetic_message_id,
+        "date": date_part,
+        "time": time_part,
+        "published_at": published_at,
+        "edited_at": None,
+        "source": "bot_manual_accept",
+        "title_hook": title_hook,
+        "body_text": final_text,
+        "body_summary": normalized_summary[:280],
+        "primary_theme": theme,
+        "secondary_themes": [],
+        "format": topic_brief.get("recommended_format") or topic_brief.get("format_type") or "expert",
+        "content_role": topic_brief.get("content_role") or last_generated.get("goal") or "expert",
+        "funnel_stage": topic_brief.get("funnel_stage") or ("solution-aware" if cta_present else "aware"),
+        "core_thesis": topic_brief.get("primary_thesis"),
+        "cta_type": "soft" if cta_present else "none",
+        "cta_present": cta_present,
+        "cta_target": infer_cta_target_from_text(lower) if cta_present else None,
+        "hashtags": hashtags,
+        "mentions_ai": mentions_ai,
+        "mentions_offer": cta_present,
+        "novelty_keys": [],
+        "manual_review_required": False,
+        "knowledge_base_version": None,
+        "primary_thesis": topic_brief.get("primary_thesis"),
+        "secondary_theses": topic_brief.get("secondary_theses"),
+        "angle": topic_brief.get("angle") or "",
+        "content_goal": topic_brief.get("content_goal") or last_generated.get("goal") or "expert",
+        "business_dimensions": topic_brief.get("business_dimensions") or [],
+        "format_type": topic_brief.get("format_type") or topic_brief.get("recommended_format") or "expert",
+        "novelty_window_days": topic_brief.get("novelty_window_days") or 30,
+    }
+
+    record = infer_editorial_metadata_from_post(base_card, prefer_llm=False)
+    upsert_post_record(record)
+    db_record = dict(record)
+    db_record["media_type"] = "text"
+    upsert_published_post(db_record)
+    return record
 
 
 def build_help_text() -> str:
@@ -2002,6 +2085,7 @@ def route_callback_query(update: dict) -> bool:
         return True
 
     if data == CALLBACK_ACCEPT:
+        persist_accepted_post_from_session(chat_id, user_id, session)
         session["mode"] = None
         save_session(chat_id, user_id, session)
         answer_callback_query(callback_query["id"], "Принято")
