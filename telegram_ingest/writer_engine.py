@@ -285,6 +285,29 @@ def mentions_ai_topic(text: str) -> bool:
     return any(token in words for token in ("ии", "ai", "gpt")) or "chatgpt" in lowered or "нейро" in lowered
 
 
+def is_ai_core_topic(text: str) -> bool:
+    lowered = text.lower()
+    if not mentions_ai_topic(lowered):
+        return False
+    context_tokens = (
+        "процесс",
+        "поряд",
+        "хаос",
+        "бот",
+        "внедр",
+        "примен",
+        "функц",
+        "команд",
+        "автомат",
+        "контент",
+        "кейс",
+        "скорост",
+        "результат",
+        "готовност",
+    )
+    return any(token in lowered for token in context_tokens)
+
+
 def choose_style_references(theme: str, rows: list[dict], golden_style_set: dict | None = None, limit: int = 3) -> list[dict]:
     theme_words = set(normalize(theme.lower()).split())
     golden_ids = set((golden_style_set or {}).get("post_ids", []))
@@ -493,7 +516,7 @@ def build_solution(profile: dict, theme: str, variant: int) -> str:
         if variant % 3 == replacement_variant and solution.startswith(old):
             solution = new + solution[len(old):]
             break
-    if mentions_ai_topic(theme) and "подключать ии" not in solution.lower():
+    if is_ai_core_topic(theme) and "подключать ии" not in solution.lower():
         solution = (
             f"{solution}\n\n"
             "И только после этого имеет смысл подключать ИИ. Иначе он ускорит не порядок, а уже существующий разнобой."
@@ -574,9 +597,7 @@ def build_reference_tail(reference_patterns: dict, variant: int) -> str:
 
 def build_focus_line(theme: str, angle: str, variant: int) -> str:
     normalized_theme = theme.lower()
-    if ("ии" in normalized_theme and "процесс" in normalized_theme) or (
-        "ии" in normalized_theme and any(token in normalized_theme for token in ("поряд", "кейс", "скорост"))
-    ):
+    if is_ai_core_topic(normalized_theme):
         variants = [
             "Вопрос не в самом ИИ, а в том, усиливает ли он уже собранный процесс или просто ускоряет разнобой.",
             "Сначала нужен порядок в ролях, процессе и контроле. И только потом ИИ начинает давать скорость.",
@@ -588,13 +609,6 @@ def build_focus_line(theme: str, angle: str, variant: int) -> str:
             "Важнее не то, как урезать всё подряд, а где у бизнеса реальные системные потери.",
             "Сейчас важнее не масштаб сокращений, а точность: где расходы действительно лишние, а где бизнес теряет деньги из-за плохой организации.",
             "Ключевой фокус такой: не экономить хаотично, а отличить внешнее давление рынка от внутренних управленческих потерь.",
-        ]
-        return variants[variant % len(variants)]
-    if any(token in normalized_theme for token in ("ии", "ai", "gpt", "нейро")):
-        variants = [
-            "Вопрос не в самом ИИ, а в том, есть ли под него нормальная управленческая конструкция.",
-            "Смысл не в инструменте, а в том, во что именно он встраивается.",
-            "Смысл не в том, чтобы подключить ИИ, а в том, чтобы не усиливать им уже существующий хаос.",
         ]
         return variants[variant % len(variants)]
     if any(token in normalized_theme for token in ("стад", "кризис")):
