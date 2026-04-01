@@ -40,6 +40,18 @@ def score_draft(critic: dict, text: str, cta_need: str) -> int:
         score -= 12
     if critic.get("golden_copy_risk") == "high":
         score -= 28
+    if critic.get("voice_authenticity_risk") == "medium":
+        score -= 18
+    if critic.get("voice_authenticity_risk") == "high":
+        score -= 36
+    if critic.get("synthetic_case_risk") == "medium":
+        score -= 12
+    if critic.get("synthetic_case_risk") == "high":
+        score -= 24
+    if critic.get("corporate_jargon_risk") == "medium":
+        score -= 10
+    if critic.get("corporate_jargon_risk") == "high":
+        score -= 20
 
     length = len(text)
     if length < 900:

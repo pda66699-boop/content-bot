@@ -50,6 +50,7 @@ from .ui import (
     BUTTON_MODE_EXPERT,
     BUTTON_MODE_MONEY,
     BUTTON_MORE_TOPICS,
+    BUTTON_ROADMAP,
     BUTTON_REWRITE,
     BUTTON_SAVE_TOPICS,
     BUTTON_TOPICS,
@@ -268,6 +269,10 @@ def format_feed_analytics() -> str:
     publishing_cadence = plan.get("publishing_cadence") or {}
     publication_feedback = plan.get("publication_feedback") or {}
     weekly_plan = plan.get("weekly_plan") or []
+    roadmap = plan.get("content_plan_roadmap") or {}
+    roadmap_current = roadmap.get("current_item") or {}
+    roadmap_next = roadmap.get("next_items") or []
+    roadmap_items = roadmap.get("items") or []
     needs = content_balance.get("needs") or {}
     cta_needs = cta_balance.get("needs") or {}
     rubric_needs = rubric_balance.get("needs") or {}
@@ -397,6 +402,41 @@ def format_feed_analytics() -> str:
     else:
         lines.append("– Лимит недели уже закрыт. Лучше не форсировать лишний пост без сильной причины.")
 
+    lines.append("")
+    lines.append("<b>🧭 Месячный roadmap:</b>")
+    if roadmap_current:
+        lines.append(
+            f"– Текущий шаг: неделя {int(roadmap_current.get('week', 0))}, "
+            f"пост {int(roadmap_current.get('order', 0))} — {html.escape(roadmap_current.get('theme') or '')}"
+        )
+        lines.append(
+            f"– Режим: {html.escape(roadmap_current.get('repositioning_mode') or 'не указан')} · "
+            f"Роль: {html.escape(roadmap_current.get('strategic_role') or '')}"
+        )
+    else:
+        lines.append("– Активных шагов roadmap не осталось: весь текущий план либо закрыт, либо не загружен.")
+
+    if roadmap_next:
+        lines.append("")
+        lines.append("<b>➡️ Ближайшие посты по roadmap:</b>")
+        for item in roadmap_next[:4]:
+            lines.append(
+                f"– W{int(item.get('week', 0))}/P{int(item.get('order', 0))}: "
+                f"{html.escape(item.get('theme') or '')} "
+                f"({html.escape(item.get('repositioning_mode') or 'не указан')})"
+            )
+
+    completed_items = [item for item in roadmap_items if item.get("completed")]
+    if completed_items:
+        lines.append("")
+        lines.append("<b>✅ Уже закрыто по roadmap:</b>")
+        for item in completed_items[-3:]:
+            matched = item.get("matched_post_title_or_date") or "совпадение найдено"
+            lines.append(
+                f"– W{int(item.get('week', 0))}/P{int(item.get('order', 0))}: "
+                f"{html.escape(item.get('theme') or '')} -> {html.escape(matched)}"
+            )
+
     missing = [pillar_labels[key] for key, value in needs.items() if value > 0.08 and key in pillar_labels]
     overheated = [pillar_labels[key] for key, value in needs.items() if value < -0.08 and key in pillar_labels]
 
@@ -448,6 +488,55 @@ def format_feed_analytics() -> str:
         lines.append(f"– Рубрика: {html.escape(RUBRIC_LABELS.get(recommendation.get('marketing_rubric'), recommendation.get('marketing_rubric') or 'Не определена'))}")
         lines.append(f"– Стадия воронки: {html.escape(recommendation.get('funnel_stage') or 'Не определена')}")
         lines.append(f"– Почему сейчас: {html.escape(recommendation.get('why_now') or '')}")
+
+    return "\n".join(lines).strip()
+
+
+def format_roadmap_overview() -> str:
+    plan = plan_next_topics()
+    roadmap = plan.get("content_plan_roadmap") or {}
+    current_item = roadmap.get("current_item") or {}
+    next_items = roadmap.get("next_items") or []
+    items = roadmap.get("items") or []
+    if not items:
+        return "🗺 Roadmap пока не загружен или ещё не рассчитан."
+
+    lines = ["<b>🗺 Месячный roadmap</b>"]
+    if current_item:
+        lines.append("")
+        lines.append("<b>Текущий шаг</b>")
+        lines.append(
+            f"– W{int(current_item.get('week', 0))}/P{int(current_item.get('order', 0))}: "
+            f"{html.escape(current_item.get('theme') or '')}"
+        )
+        lines.append(
+            f"– Режим: {html.escape(current_item.get('repositioning_mode') or 'не указан')} · "
+            f"Цель: {html.escape(current_item.get('goal') or 'не указана')}"
+        )
+    else:
+        lines.append("")
+        lines.append("– Активный шаг не найден: текущий roadmap либо уже закрыт, либо не размечен.")
+
+    if next_items:
+        lines.append("")
+        lines.append("<b>Дальше по плану</b>")
+        for item in next_items[:5]:
+            lines.append(
+                f"– W{int(item.get('week', 0))}/P{int(item.get('order', 0))}: "
+                f"{html.escape(item.get('theme') or '')} "
+                f"({html.escape(item.get('repositioning_mode') or 'не указан')})"
+            )
+
+    completed = [item for item in items if item.get("completed")]
+    if completed:
+        lines.append("")
+        lines.append("<b>Уже закрыто</b>")
+        for item in completed[-4:]:
+            matched = item.get("matched_post_title_or_date") or "совпадение найдено"
+            lines.append(
+                f"– W{int(item.get('week', 0))}/P{int(item.get('order', 0))}: "
+                f"{html.escape(item.get('theme') or '')} -> {html.escape(matched)}"
+            )
 
     return "\n".join(lines).strip()
 
@@ -2019,7 +2108,13 @@ def route_message_update(update: dict) -> bool:
     if text == BUTTON_ANALYTICS:
         session["mode"] = None
         save_session(chat_id, user_id, session)
-        send_rich_chunks(chat_id, format_feed_analytics(), reply_markup=build_main_menu_keyboard())
+        send_rich_chunks(chat_id, format_feed_analytics(), reply_markup=build_analytics_menu_keyboard())
+        return True
+
+    if text == BUTTON_ROADMAP:
+        session["mode"] = None
+        save_session(chat_id, user_id, session)
+        send_rich_chunks(chat_id, format_roadmap_overview(), reply_markup=build_analytics_menu_keyboard())
         return True
 
     if text == BUTTON_EVALUATE_POST:

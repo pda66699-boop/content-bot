@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 
-from .config import POSTS_INDEX_PATH
+from .config import CONTENT_ROADMAP_PATH, POSTS_INDEX_PATH
 from .backlog_memory import load_backlog
 from .editorial_extractor import infer_editorial_metadata_from_topic
 from .feed_coverage import analyze_feed_coverage, infer_angle_signature, recommend_content_plan_slot
@@ -89,6 +89,50 @@ MONEY_THEME_TOKENS = (
     "стабилизац",
 )
 
+PRIMARY_SEGMENT_TOKENS = (
+    "сервис",
+    "агентств",
+    "юрид",
+    "консалт",
+    "образов",
+    "школ",
+    "творчес",
+    "логист",
+    "услуг",
+)
+
+NEW_MODEL_TOKENS = (
+    "потер",
+    "утеч",
+    "прибыл",
+    "марж",
+    "деньг",
+    "выруч",
+    "все на мне",
+    "всё на мне",
+    "без меня",
+    "узк",
+    "ручн",
+    "ответствен",
+    "дедлайн",
+    "передел",
+    "собственник",
+)
+
+TRANSITION_TOPIC_TOKENS = (
+    "делег",
+    "найм",
+    "команд",
+    "сотруд",
+    "роль",
+    "оргструкт",
+    "регламент",
+    "процесс",
+    "управл",
+    "подряд",
+    "контрол",
+)
+
 MARKETING_RUBRIC_RANGES = {
     "case": {"min": 0.10, "max": 0.20},
     "mistake_breakdown": {"min": 0.10, "max": 0.20},
@@ -134,6 +178,7 @@ class TopicCandidate:
     cta_need: str
     content_pillar: str
     marketing_rubric: str = ""
+    repositioning_mode: str = "transition"
     funnel_stage: str = ""
     primary_thesis: str | None = None
     secondary_theses: list[str] | None = None
@@ -187,6 +232,16 @@ def load_posts() -> list[dict]:
     return [normalize_editorial_metadata(json.loads(line)) for line in POSTS_INDEX_PATH.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+def load_content_roadmap() -> list[dict]:
+    if not CONTENT_ROADMAP_PATH.exists():
+        return []
+    try:
+        data = json.loads(CONTENT_ROADMAP_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    return [item for item in data if isinstance(item, dict)]
+
+
 def recent_rows_by_days(rows: list[dict], days: int) -> list[dict]:
     cutoff = date.today() - timedelta(days=max(days - 1, 0))
     selected: list[dict] = []
@@ -217,6 +272,40 @@ def topic_overlap_score(topic_a: str, topic_b: str) -> float:
     if not a or not b:
         return 0.0
     return len(a & b) / len(a | b)
+
+
+def roadmap_match_score(roadmap_theme: str, row: dict) -> float:
+    return max(
+        topic_overlap_score(roadmap_theme, str(row.get("primary_theme") or "")),
+        topic_overlap_score(roadmap_theme, str(row.get("title_hook") or "")),
+    )
+
+
+def build_roadmap_state(rows: list[dict], roadmap: list[dict]) -> dict:
+    if not roadmap:
+        return {"items": [], "next_items": [], "current_item": None}
+
+    items: list[dict] = []
+    for item in sorted(roadmap, key=lambda x: int(x.get("order", 999))):
+        best_match = None
+        best_score = 0.0
+        for row in rows:
+            score = roadmap_match_score(str(item.get("theme") or ""), row)
+            if score > best_score:
+                best_score = score
+                best_match = row
+        completed = best_score >= 0.58
+        items.append(
+            {
+                **item,
+                "completed": completed,
+                "matched_post_title_or_date": matched_post_reference(best_match or {}) if completed else None,
+            }
+        )
+
+    next_items = [item for item in items if not item.get("completed")][:4]
+    current_item = next_items[0] if next_items else None
+    return {"items": items, "next_items": next_items, "current_item": current_item}
 
 
 def tokenize_topic(text: str) -> list[str]:
@@ -292,6 +381,33 @@ def infer_candidate_pillar(theme: str, content_role: str, cta_need: str) -> str:
     if cta_need in {"soft", "hard"} and normalized_role in {"case", "applied", "diagnostic"}:
         return "money"
     return "expert"
+
+
+def infer_repositioning_mode(theme: str, angle: str = "", why_now: str = "") -> str:
+    combined = normalize_topic(f"{theme} {angle} {why_now}")
+    new_hits = sum(1 for token in NEW_MODEL_TOKENS if token in combined)
+    transition_hits = sum(1 for token in TRANSITION_TOPIC_TOKENS if token in combined)
+    segment_hits = sum(1 for token in PRIMARY_SEGMENT_TOKENS if token in combined)
+
+    if new_hits >= 2 or (new_hits >= 1 and segment_hits >= 1):
+        return "new_model"
+    if transition_hits >= 1 and (new_hits >= 2 or segment_hits >= 1 or "управля" in combined or "хаос" in combined):
+        return "transition"
+    if transition_hits >= 1:
+        return "legacy"
+    if new_hits >= 1:
+        return "new_model"
+    return "legacy"
+
+
+def repositioning_penalty(mode: str) -> int:
+    if mode == "legacy":
+        return -18
+    if mode == "transition":
+        return 4
+    if mode == "new_model":
+        return 8
+    return 0
 
 
 def classify_post_rubric(row: dict) -> str:
@@ -432,13 +548,15 @@ def _dedupe_reason_fragments(text: str) -> str:
 
 def enrich_candidate_with_balance(candidate: TopicCandidate, feed_state: dict, campaign_mode: str) -> TopicCandidate:
     pillar = candidate.content_pillar or infer_candidate_pillar(candidate.theme, candidate.content_role, candidate.cta_need)
+    repositioning_mode = candidate.repositioning_mode or infer_repositioning_mode(candidate.theme, candidate.angle, candidate.why_now)
     bonus = pillar_rebalance_bonus(pillar, feed_state)
     campaign_bonus, campaign_reason = campaign_score_bonus(candidate, campaign_mode)
     cta_strategy = resolve_cta_strategy(candidate.theme, pillar, campaign_mode)
     flagship_fit = compute_flagship_fit(candidate.theme, candidate.angle, pillar)
     rubric = candidate.marketing_rubric or infer_candidate_rubric(candidate.theme, candidate.content_role, pillar, candidate.cta_need)
     rubric_bonus = rubric_rebalance_bonus(rubric, feed_state)
-    score = candidate.score + bonus + campaign_bonus + flagship_fit["score"] + rubric_bonus
+    mode_bonus = repositioning_penalty(repositioning_mode)
+    score = candidate.score + bonus + campaign_bonus + flagship_fit["score"] + rubric_bonus + mode_bonus
     why_now = candidate.why_now
     if bonus > 0:
         pillar_labels = {
@@ -453,6 +571,12 @@ def enrich_candidate_with_balance(candidate: TopicCandidate, feed_state: dict, c
         why_now = f"{why_now}; тема хорошо поддерживает флагман «45 дней»"
     if rubric_bonus > 0:
         why_now = f"{why_now}; такого формата сейчас не хватает в ленте"
+    if repositioning_mode == "new_model":
+        why_now = f"{why_now}; тема уже живёт в новой модели позиционирования"
+    elif repositioning_mode == "transition":
+        why_now = f"{why_now}; это хороший переходный мост из старой рамки канала в новую"
+    elif repositioning_mode == "legacy":
+        why_now = f"{why_now}; тему нужно сузить и перевести в язык потерь, денег или зависимости от собственника"
     why_now = _dedupe_reason_fragments(why_now)
     return TopicCandidate(
         theme=candidate.theme,
@@ -463,6 +587,7 @@ def enrich_candidate_with_balance(candidate: TopicCandidate, feed_state: dict, c
         cta_need=cta_strategy["preferred_cta_need"] if candidate.cta_need != "none" else "none",
         content_pillar=pillar,
         marketing_rubric=rubric,
+        repositioning_mode=repositioning_mode,
         funnel_stage=cta_strategy.get("funnel_stage") or "",
         primary_thesis=candidate.primary_thesis,
         secondary_theses=candidate.secondary_theses,
@@ -553,6 +678,7 @@ def _utility_score(candidate: TopicCandidate, feed_state: dict) -> int:
         score += int(round(pillar_need * 40))
     if rubric_need > 0:
         score += int(round(rubric_need * 25))
+    score += repositioning_penalty(candidate.repositioning_mode or infer_repositioning_mode(candidate.theme, candidate.angle, candidate.why_now))
     return score
 
 
@@ -712,6 +838,7 @@ def enrich_candidate_with_semantics(
         cta_need=candidate.cta_need,
         content_pillar=candidate.content_pillar,
         marketing_rubric=candidate.marketing_rubric,
+        repositioning_mode=candidate.repositioning_mode or infer_repositioning_mode(candidate.theme, candidate.angle, candidate.why_now),
         funnel_stage=metadata.get("funnel_stage") or candidate.funnel_stage,
         primary_thesis=metadata.get("primary_thesis"),
         secondary_theses=metadata.get("secondary_theses") or [],
@@ -1151,6 +1278,26 @@ def pick_default_candidates(feed_state: dict, rows: list[dict], exclude_topics: 
     open_loops = get_high_priority_open_loops()
     backlog_topics = load_backlog()
     campaign_mode = get_positioning_flags().get("campaign_mode", "base")
+    roadmap_state = build_roadmap_state(rows, load_content_roadmap())
+
+    for idx, item in enumerate(roadmap_state.get("next_items", [])[:4]):
+        topic = item.get("theme")
+        if not topic or normalize_topic(topic) in exclude_topics or topic in recent_topics:
+            continue
+        content_role = "diagnostic" if item.get("goal") in {"lead", "warmup"} else "expert"
+        cta_need = "soft" if item.get("goal") == "lead" else "optional"
+        candidates.append(
+            TopicCandidate(
+                theme=topic,
+                angle=str(item.get("angle") or "подать тему по editorial roadmap"),
+                score=420 - idx * 80,
+                why_now=f"это следующий шаг редакционного roadmap: неделя {item.get('week')}, пост {item.get('order')}",
+                content_role=content_role,
+                cta_need=cta_need,
+                content_pillar=infer_candidate_pillar(topic, content_role, cta_need),
+                repositioning_mode=str(item.get("repositioning_mode") or infer_repositioning_mode(topic, str(item.get("angle") or ""), str(item.get("strategic_role") or ""))),
+            )
+        )
 
     for loop in open_loops[:2]:
         topic = loop.get("open_loop_topic")
@@ -1165,6 +1312,7 @@ def pick_default_candidates(feed_state: dict, rows: list[dict], exclude_topics: 
                 content_role="applied",
                 cta_need="optional",
                 content_pillar=infer_candidate_pillar(topic, "applied", "optional"),
+                repositioning_mode="transition",
             )
         )
 
@@ -1185,6 +1333,7 @@ def pick_default_candidates(feed_state: dict, rows: list[dict], exclude_topics: 
                 cta_need="optional",
                 content_pillar=pillar,
                 marketing_rubric=infer_candidate_rubric(topic, content_role, pillar, "optional", (item.get("context") or {}).get("source_kind") or item.get("source")),
+                repositioning_mode=infer_repositioning_mode(topic, backlog_priority_angle(topic, pillar, item), backlog_priority_why_now(pillar, item)),
             )
         )
 
@@ -1199,6 +1348,7 @@ def pick_default_candidates(feed_state: dict, rows: list[dict], exclude_topics: 
                     content_role="applied",
                     cta_need="optional",
                     content_pillar="expert",
+                    repositioning_mode="transition",
                 ),
                 TopicCandidate(
                     theme="работа с причинами, а не симптомами",
@@ -1208,6 +1358,7 @@ def pick_default_candidates(feed_state: dict, rows: list[dict], exclude_topics: 
                     content_role="diagnostic",
                     cta_need="optional",
                     content_pillar="expert",
+                    repositioning_mode="transition",
                 ),
                 TopicCandidate(
                     theme="скрытые потери в операционке",
@@ -1217,6 +1368,7 @@ def pick_default_candidates(feed_state: dict, rows: list[dict], exclude_topics: 
                     content_role="diagnostic",
                     cta_need="soft",
                     content_pillar="money",
+                    repositioning_mode="new_model",
                 ),
             ]
         )
@@ -1232,6 +1384,7 @@ def pick_default_candidates(feed_state: dict, rows: list[dict], exclude_topics: 
                     content_role="expert",
                     cta_need="optional",
                     content_pillar="expert",
+                    repositioning_mode=infer_repositioning_mode(topic, "дать свежий угол без повтора последних формулировок", "тема входит в системное ядро канала и сейчас не перегрета в последних постах"),
                 )
             )
 
@@ -1246,6 +1399,7 @@ def pick_default_candidates(feed_state: dict, rows: list[dict], exclude_topics: 
                     content_role="image",
                     cta_need="optional",
                     content_pillar="conversational",
+                    repositioning_mode="transition",
                 ),
                 TopicCandidate(
                     theme="свободное время собственника",
@@ -1255,6 +1409,7 @@ def pick_default_candidates(feed_state: dict, rows: list[dict], exclude_topics: 
                     content_role="image",
                     cta_need="optional",
                     content_pillar="conversational",
+                    repositioning_mode="transition",
                 ),
             ]
         )
@@ -1270,6 +1425,7 @@ def pick_default_candidates(feed_state: dict, rows: list[dict], exclude_topics: 
                     content_role="diagnostic",
                     cta_need="soft",
                     content_pillar="money",
+                    repositioning_mode="new_model",
                 ),
                 TopicCandidate(
                     theme="скрытые потери в операционке",
@@ -1279,6 +1435,7 @@ def pick_default_candidates(feed_state: dict, rows: list[dict], exclude_topics: 
                     content_role="diagnostic",
                     cta_need="soft",
                     content_pillar="money",
+                    repositioning_mode="new_model",
                 ),
             ]
         )
@@ -1311,7 +1468,7 @@ def pick_default_candidates(feed_state: dict, rows: list[dict], exclude_topics: 
                 break
 
     deduped.sort(key=lambda item: item.score, reverse=True)
-    return deduped[:5]
+    return deduped[:8]
 
 
 def evaluate_user_theme(user_theme: str, rows: list[dict], feed_state: dict) -> dict:
@@ -1427,6 +1584,11 @@ def build_user_theme_candidate(user_verdict: dict) -> TopicCandidate | None:
         content_role="diagnostic",
         cta_need="optional",
         content_pillar=infer_candidate_pillar(user_verdict["original_theme"], "diagnostic", "optional"),
+        repositioning_mode=infer_repositioning_mode(
+            user_verdict["original_theme"],
+            user_verdict["recommended_angle"] or "",
+            user_verdict["comment"] or "",
+        ),
     )
 
 
@@ -1467,6 +1629,7 @@ def merge_llm_candidates(
                 cta_need=(item.get("cta_need") or "optional").strip(),
                 content_pillar=(item.get("content_pillar") or infer_candidate_pillar(theme, item.get("content_role") or "expert", item.get("cta_need") or "optional")).strip(),
                 marketing_rubric=(item.get("marketing_rubric") or infer_candidate_rubric(theme, item.get("content_role") or "expert", item.get("content_pillar") or "expert", item.get("cta_need") or "optional")).strip(),
+                repositioning_mode=(item.get("repositioning_mode") or infer_repositioning_mode(theme, item.get("angle") or "", item.get("why_now") or "")).strip(),
                 primary_thesis=item.get("primary_thesis"),
                 secondary_theses=item.get("secondary_theses") or [],
                 business_dimensions=item.get("business_dimensions") or [],
@@ -1496,7 +1659,7 @@ def merge_llm_candidates(
             continue
         deduped.append(candidate)
         dedup_seen.add(normalized)
-    return deduped[:5]
+    return deduped[:8]
 
 
 def plan_next_topics(
@@ -1514,6 +1677,7 @@ def plan_next_topics(
     positioning_flags = get_positioning_flags()
     campaign_mode = positioning_flags.get("campaign_mode", "base")
     recommended_slot = recommend_content_plan_slot(feed_coverage, campaign_mode=campaign_mode)
+    roadmap_state = build_roadmap_state(rows, load_content_roadmap())
 
     best_next_topics = pick_default_candidates(feed_state, rows, exclude_topics=set(exclude_topics or []))
     best_next_topics = [
@@ -1532,6 +1696,7 @@ def plan_next_topics(
         "repeat_risk": None,
         "comment": "Пользовательская тема не передана.",
     }
+    enriched_user_candidate: TopicCandidate | None = None
 
     if user_theme:
         user_verdict = evaluate_user_theme(user_theme, rows, feed_state)
@@ -1572,7 +1737,7 @@ def plan_next_topics(
             enriched_user_candidate = apply_user_theme_verdict(enriched_user_candidate, user_verdict)
             best_next_topics = rank_admissible_candidates(
                 [enriched_user_candidate] + [topic for topic in best_next_topics if topic.theme != user_candidate.theme]
-            )[:5]
+            )[:8]
 
     current_feed_state = (
         f"Последние {feed_state['recent_window_size']} постов содержат {feed_state['ai_recent_count']} ИИ-постов "
@@ -1593,7 +1758,11 @@ def plan_next_topics(
             "open_loops": open_loops[:5],
             "campaign_mode": campaign_mode,
             "recommended_slot": recommended_slot,
+            "roadmap_next_items": roadmap_state.get("next_items"),
             "flagship_offer": positioning_flags.get("flagship_offer"),
+            "primary_segment": positioning_flags.get("primary_segment"),
+            "priority_pillars": positioning_flags.get("priority_pillars"),
+            "repositioning_rules": positioning_flags.get("repositioning_rules"),
             "content_balance_ranges": positioning_flags.get("content_balance_ranges"),
             "cta_matrix_overview": positioning_flags.get("cta_matrix_overview"),
             "best_next_topics": [
@@ -1608,6 +1777,7 @@ def plan_next_topics(
                     "cta_need": item.cta_need,
                     "content_pillar": item.content_pillar,
                     "marketing_rubric": item.marketing_rubric,
+                    "repositioning_mode": item.repositioning_mode,
                     "funnel_stage": item.funnel_stage,
                     "business_dimensions": item.business_dimensions,
                     "novelty_status": item.novelty_status,
@@ -1642,6 +1812,11 @@ def plan_next_topics(
         "current_feed_state": current_feed_state,
         "feed_coverage": feed_coverage,
         "recommended_slot": recommended_slot,
+        "content_plan_roadmap": {
+            "current_item": roadmap_state.get("current_item"),
+            "next_items": roadmap_state.get("next_items"),
+            "items": roadmap_state.get("items"),
+        },
         "recent_topics_closed": feed_state["recent_topics"][-5:],
         "open_loops": open_loops[:5],
         "content_balance": {
@@ -1687,6 +1862,7 @@ def plan_next_topics(
                 "secondary_theses": item.secondary_theses,
                 "content_pillar": item.content_pillar,
                 "marketing_rubric": item.marketing_rubric,
+                "repositioning_mode": item.repositioning_mode,
                 "funnel_stage": item.funnel_stage,
                 "why_now": item.why_now,
                 "recommended_slot": recommended_slot,
@@ -1725,6 +1901,41 @@ def plan_next_topics(
             for item in weekly_plan_candidates
         ],
         "avoid_now": avoid_now,
+        "user_theme_analysis": None
+        if enriched_user_candidate is None
+        else {
+            "theme": enriched_user_candidate.theme,
+            "angle": enriched_user_candidate.angle,
+            "score": enriched_user_candidate.score,
+            "why_now": enriched_user_candidate.why_now,
+            "repositioning_mode": enriched_user_candidate.repositioning_mode,
+            "novelty_status": enriched_user_candidate.novelty_status,
+            "editorial_admissibility": humanize_editorial_admissibility(enriched_user_candidate.editorial_gate),
+            "editorial_gate": enriched_user_candidate.editorial_gate,
+            "matched_post_title_or_date": enriched_user_candidate.matched_post_title_or_date,
+            "matched_primary_thesis": enriched_user_candidate.matched_primary_thesis,
+            "why_not_fresh": enriched_user_candidate.why_not_fresh,
+            "reason": enriched_user_candidate.reason or enriched_user_candidate.why_now,
+            "allowed_reframes": enriched_user_candidate.allowed_reframes,
+            "novelty_penalty": enriched_user_candidate.novelty_penalty,
+            "repeat_penalty": enriched_user_candidate.repeat_penalty,
+            "total_penalty": enriched_user_candidate.total_penalty,
+            "score_breakdown": {
+                "novelty_component": enriched_user_candidate.novelty_score,
+                "angle_freshness_component": enriched_user_candidate.angle_freshness_score,
+                "funnel_fit_component": enriched_user_candidate.funnel_fit_score,
+                "positioning_component": enriched_user_candidate.positioning_score,
+                "utility_component": enriched_user_candidate.utility_score,
+                "conversion_relevance_component": enriched_user_candidate.conversion_relevance_score,
+                "continuity_component": enriched_user_candidate.continuity_component,
+                "slot_fit_component": enriched_user_candidate.slot_fit_score,
+                "penalties": {
+                    "novelty_penalty": enriched_user_candidate.novelty_penalty,
+                    "repeat_penalty": enriched_user_candidate.repeat_penalty,
+                    "total_penalty": enriched_user_candidate.total_penalty,
+                },
+            },
+        },
         "best_next_topics": [
             {
                 "theme": item.theme,
@@ -1738,6 +1949,7 @@ def plan_next_topics(
                 "cta_need": item.cta_need,
                 "content_pillar": item.content_pillar,
                 "marketing_rubric": item.marketing_rubric,
+                "repositioning_mode": item.repositioning_mode,
                 "funnel_stage": item.funnel_stage,
                 "business_dimensions": item.business_dimensions,
                 "novelty_status": item.novelty_status,
@@ -1795,6 +2007,7 @@ def plan_next_topics(
             "cta_need": recommended_topic.cta_need,
             "content_pillar": recommended_topic.content_pillar,
             "marketing_rubric": recommended_topic.marketing_rubric,
+            "repositioning_mode": recommended_topic.repositioning_mode,
             "funnel_stage": recommended_topic.funnel_stage,
             "business_dimensions": recommended_topic.business_dimensions,
             "novelty_status": recommended_topic.novelty_status,

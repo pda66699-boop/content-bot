@@ -64,7 +64,8 @@ class PlannerRegressionTests(unittest.TestCase):
             plan = plan_next_topics(user_theme="скрытые потери в операционке")
 
         self.assertEqual(plan["user_theme_verdict"]["status"], "reframe")
-        candidate = next(item for item in plan["best_next_topics"] if item["theme"] == "скрытые потери в операционке")
+        candidate = plan["user_theme_analysis"]
+        self.assertIsNotNone(candidate)
         self.assertEqual(candidate["novelty_status"], "reframe_allowed")
         self.assertEqual(candidate["editorial_admissibility"], "reframe_only")
         self.assertTrue(candidate["why_not_fresh"])
@@ -85,7 +86,8 @@ class PlannerRegressionTests(unittest.TestCase):
         with patched_planner_runtime(archive):
             plan = plan_next_topics(user_theme="скрытые потери в операционке")
 
-        candidate = next(item for item in plan["best_next_topics"] if item["theme"] == "скрытые потери в операционке")
+        candidate = plan["user_theme_analysis"]
+        self.assertIsNotNone(candidate)
         self.assertNotEqual(candidate["novelty_status"], "fresh")
         self.assertEqual(candidate["editorial_admissibility"], "reframe_only")
         self.assertTrue("reframe" in candidate["reason"].lower() or "не считается fresh" in candidate["reason"].lower())
@@ -338,7 +340,8 @@ class PlannerRegressionTests(unittest.TestCase):
         ):
             plan = plan_next_topics(user_theme="скрытые потери в операционке")
 
-        candidate = next(item for item in plan["best_next_topics"] if item["theme"] == "скрытые потери в операционке")
+        candidate = plan["user_theme_analysis"]
+        self.assertIsNotNone(candidate)
         self.assertEqual(candidate["novelty_status"], "reframe_allowed")
         self.assertEqual(candidate["editorial_admissibility"], "reframe_only")
 

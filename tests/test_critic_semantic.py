@@ -10,7 +10,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from telegram_ingest.critic_engine import critic_review, detect_semantic_repeat_risk  # noqa: E402
+from telegram_ingest.critic_engine import (  # noqa: E402
+    critic_review,
+    detect_legacy_positioning_risk,
+    detect_semantic_repeat_risk,
+    detect_synthetic_case_risk,
+    detect_corporate_jargon_risk,
+)
 
 
 def _archive_row(days_ago: int, title: str, thesis: str, angle: str) -> dict:
@@ -81,6 +87,97 @@ class CriticSemanticRepeatTests(unittest.TestCase):
         self.assertIn("semantic_repeat_risk", review)
         self.assertIn("semantic_repeat_note", review)
         self.assertIn(review["semantic_repeat_risk"], {"medium", "high"})
+
+    def test_detect_legacy_positioning_risk_flags_broad_old_frame(self) -> None:
+        """Broad useful text without the new positioning signals should be flagged as legacy-risk."""
+
+        text = (
+            "Как нанимать сотрудников без ошибок.\n\n"
+            "Найм важен для любого бизнеса. Нужно прописать требования, провести собеседование и выстроить адаптацию."
+        )
+
+        risk, note = detect_legacy_positioning_risk(text)
+
+        self.assertEqual(risk, "medium")
+        self.assertTrue(note)
+
+    def test_critic_review_exposes_legacy_positioning_fields(self) -> None:
+        """critic_review should expose legacy-positioning diagnostics for strategic drift."""
+
+        archive = [
+            _archive_row(
+                20,
+                "оргструктура и роли",
+                "Без ролей и ответственности управляемость не появляется.",
+                "через перегрузку собственника",
+            )
+        ]
+        text = (
+            "Как делегировать задачи команде.\n\n"
+            "Делегирование нужно каждому руководителю. Важно правильно ставить задачи и контролировать исполнение."
+        )
+
+        with patch("telegram_ingest.critic_engine.load_rows", return_value=archive):
+            review = critic_review(text)
+
+        self.assertIn("legacy_positioning_risk", review)
+        self.assertIn("legacy_positioning_note", review)
+        self.assertEqual(review["legacy_positioning_risk"], "medium")
+        self.assertEqual(review["method_risk"], "medium")
+        self.assertIn("сузить тему", review["rewrite_guidance"].lower())
+
+    def test_detect_synthetic_case_risk_flags_invented_case_details(self) -> None:
+        """Invented-looking exact case metrics should trigger a voice/authenticity warning."""
+
+        text = (
+            "В одной компании, с которой я работал, мы переписали три роли.\n\n"
+            "Через два спринта количество вопросов к собственнику упало на 60%, "
+            "а сам собственник получил 8 часов в неделю."
+        )
+
+        risk, note = detect_synthetic_case_risk(text)
+
+        self.assertEqual(risk, "high")
+        self.assertTrue(note)
+
+    def test_detect_corporate_jargon_risk_flags_consultant_language(self) -> None:
+        """Corporate consultant jargon should be treated as a voice risk."""
+
+        text = (
+            "Роль должна быть описана через измеримый результат и ЦКП.\n\n"
+            "Дальше нужен владелец процесса и правила эскалации."
+        )
+
+        risk, note = detect_corporate_jargon_risk(text)
+
+        self.assertEqual(risk, "high")
+        self.assertTrue(note)
+
+    def test_critic_review_exposes_voice_authenticity_fields(self) -> None:
+        """critic_review should surface voice authenticity diagnostics for synthetic/corporate drift."""
+
+        archive = [
+            _archive_row(
+                14,
+                "роль и ответственность",
+                "Без ролей и ответственности управляемость не появляется.",
+                "через перегрузку собственника",
+            )
+        ]
+        text = (
+            "⚠️ Сильная команда не гарантирует управляемость\n\n"
+            "В одной компании, с которой я работал, мы переписали три роли.\n\n"
+            "Через два спринта количество вопросов к собственнику упало на 60%."
+        )
+
+        with patch("telegram_ingest.critic_engine.load_rows", return_value=archive):
+            review = critic_review(text)
+
+        self.assertIn("voice_authenticity_risk", review)
+        self.assertIn("voice_authenticity_note", review)
+        self.assertIn(review["voice_authenticity_risk"], {"medium", "high"})
+        guidance = review["rewrite_guidance"].lower()
+        self.assertTrue("синтет" in guidance or "выдум" in guidance)
 
 
 if __name__ == "__main__":

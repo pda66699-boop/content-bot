@@ -34,10 +34,20 @@ FLAGSHIP_KEYWORDS = (
     "операцион",
     "прибыл",
     "собственник",
+    "ручн",
+    "узк",
+    "ответствен",
+    "дедлайн",
+    "передел",
+    "маржа",
+    "утеч",
+    "сервис",
 )
 MONEY_TOKENS = ("расход", "издерж", "прибыл", "деньг", "выруч", "потер", "марж", "себестоим")
 CONVERSATIONAL_TOKENS = ("жизн", "отдых", "пауза", "инсайт", "свобод", "отношение", "сует", "выбор")
 DIAGNOSTIC_TOKENS = ("стад", "кризис", "диагност", "перекос", "симптом", "причин")
+SEGMENT_TOKENS = ("сервис", "агентств", "юрид", "консалт", "школ", "образов", "креатив", "логист")
+OWNER_DEPENDENCY_TOKENS = ("все на мне", "всё на мне", "без меня", "узкое горлышко", "собственник", "ручн")
 
 
 def normalize_positioning_text(text: str) -> str:
@@ -85,6 +95,14 @@ def compute_flagship_fit(theme: str, angle: str = "", content_pillar: str | None
     if any(token in combined for token in ("регламент", "роль", "оргструкт", "процесс", "операцион")):
         score += 4
         reasons.append("тема показывает опорные узлы, которые логично связываются с 45-дневной сборкой")
+
+    if any(token in combined for token in SEGMENT_TOKENS):
+        score += 4
+        reasons.append("тема ближе к приоритетному сегменту сервисного бизнеса 60-150 млн")
+
+    if any(token in combined for token in OWNER_DEPENDENCY_TOKENS):
+        score += 4
+        reasons.append("тема заходит через зависимость бизнеса от собственника, а это один из самых сильных входов в позиционирование")
 
     return {
         "score": score,
@@ -159,8 +177,22 @@ def load_positioning_snapshot() -> str:
 def get_positioning_flags() -> dict:
     return {
         "knowledge_base_version": get_active_knowledge_version(),
-        "flagship_offer": "Антикризисная стабилизация бизнеса за 45 дней",
-        "market_language": ["потери", "контроль", "прибыль", "порядок", "свобода владельца"],
+        "flagship_offer": "Бизнес без потерь — 45 рабочих дней на устранение управленческих потерь",
+        "market_language": ["потери", "контроль", "прибыль", "плавающая прибыль", "узкие места", "зависимость от собственника"],
+        "primary_segment": "сервисный бизнес 60-150 млн ₽",
+        "priority_pillars": [
+            "управленческий хаос -> потери денег",
+            "собственник как узкое горлышко",
+            "кейсы и мини-кейсы системных изменений",
+            "ошибки собственников в управлении, найме и делегировании",
+            "систематизация без тотальной перестройки",
+        ],
+        "repositioning_rules": {
+            "soft_shift_only": True,
+            "bridge_topics_first": True,
+            "avoid_long_legacy_sequences": True,
+            "transition_logic": "старая знакомая тема -> новый угол через деньги, потери, зависимость и управляемость",
+        },
         "funnel_entry_bot": "@adizesbizbot",
         "ai_policy": "ИИ как усилитель внутри системы, а не фасад бренда",
         "campaign_mode": get_campaign_mode(),

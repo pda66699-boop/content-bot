@@ -1,5 +1,5 @@
 {
-  "active_version": "v1.1",
+  "active_version": "v1.2",
   "versions": {
     "v1": {
       "label": "Initial positioning base",
@@ -8,6 +8,10 @@
     "v1.1": {
       "label": "Positioning snapshot with 45-day flagship and adizes funnel entry",
       "notes": "Built from current positioning docs, audience analysis, 45-day offer, and adizesbizbot funnel logic."
+    },
+    "v1.2": {
+      "label": "Content strategy base with soft repositioning and service-business focus",
+      "notes": "Built from final audience analysis, product reframing docs, Telegram archive audit, and embedded content strategy for soft repositioning into the 60-150M service-business segment."
     }
   }
 }

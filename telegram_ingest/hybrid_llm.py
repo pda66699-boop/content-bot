@@ -28,7 +28,8 @@ def maybe_generate_planner_candidates(payload: dict) -> list[dict] | None:
 
     system_prompt = (
         "Ты контент-стратег Дениса Педченко. Придумывай темы и углы для Telegram-канала, "
-        "но не ломай методологию: управляемость, архитектура бизнеса, роли, процессы, системные причины. "
+        "но не ломай методологию: сервисный бизнес 60-150 млн, управленческие потери, зависимость от собственника, роли, процессы, ответственность и системные причины. "
+        "Старые широкие темы допустимы только как переходные мосты в новую модель. "
         "ИИ допустим только как инструмент внутри системы. Верни только JSON."
     )
     user_prompt = json.dumps(
@@ -41,6 +42,7 @@ def maybe_generate_planner_candidates(payload: dict) -> list[dict] | None:
                         "angle": "угол подачи",
                         "content_role": "diagnostic|educational|trust",
                         "funnel_stage": "problem-aware|solution-aware|aware",
+                        "repositioning_mode": "transition|new_model",
                         "novelty_rationale": "почему тема сейчас свежа",
                         "cta_suggestion": "optional|soft|none",
                     }
@@ -49,6 +51,9 @@ def maybe_generate_planner_candidates(payload: dict) -> list[dict] | None:
             "business_goal": payload.get("business_goal"),
             "campaign_mode": payload.get("campaign_mode"),
             "flagship_offer": payload.get("flagship_offer"),
+            "primary_segment": payload.get("primary_segment"),
+            "priority_pillars": payload.get("priority_pillars"),
+            "repositioning_rules": payload.get("repositioning_rules"),
             "content_balance_ranges": payload.get("content_balance_ranges"),
             "cta_matrix_overview": payload.get("cta_matrix_overview"),
             "current_feed_state": payload.get("current_feed_state"),

@@ -9,6 +9,7 @@ BUTTON_MORE_CASES = "🔁 Ещё 5 кейсов"
 BUTTON_RESET_CASES = "↩️ К первым 5 кейсам"
 BUTTON_SECTION_ANALYTICS = "📊 Аналитика канала"
 BUTTON_ANALYTICS = "📊 Аналитика ленты"
+BUTTON_ROADMAP = "🗺 Roadmap"
 BUTTON_EVALUATE = "🧭 Оценить мою тему"
 BUTTON_EVALUATE_POST = "📝 Оценить пост"
 BUTTON_WRITE = "✍️ Написать пост на мою тему"
@@ -71,6 +72,7 @@ def build_analytics_menu_keyboard() -> dict:
     return {
         "keyboard": [
             [{"text": BUTTON_ANALYTICS}],
+            [{"text": BUTTON_ROADMAP}],
             [{"text": BUTTON_EVALUATE}],
             [{"text": BUTTON_EVALUATE_POST}],
             [{"text": BUTTON_BACK_TO_MENU}],

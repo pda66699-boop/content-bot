@@ -129,6 +129,7 @@ class PlannerSemanticLayerTests(unittest.TestCase):
         self.assertIn("matched_post_title_or_date", candidate)
         self.assertIn("matched_primary_thesis", candidate)
         self.assertIn("why_not_fresh", candidate)
+        self.assertIn("repositioning_mode", candidate)
 
     def test_near_duplicate_topic_does_not_rank_above_fresh_topic(self) -> None:
         """A reframe-only topic should not outrank a genuinely fresh candidate."""
@@ -179,7 +180,9 @@ class PlannerSemanticLayerTests(unittest.TestCase):
         ):
             plan = plan_next_topics(user_theme="скрытые потери в операционке")
 
-        candidate = next(item for item in plan["best_next_topics"] if item["theme"] == "скрытые потери в операционке")
+        candidate = plan["user_theme_analysis"]
+        self.assertIsNotNone(candidate)
+        self.assertEqual(candidate["theme"], "скрытые потери в операционке")
         self.assertGreater(candidate["total_penalty"], 0)
         self.assertIn("penalties", candidate["score_breakdown"])
 
@@ -259,6 +262,104 @@ class PlannerSemanticLayerTests(unittest.TestCase):
         fresh = plan["best_next_topics"][0]
         self.assertEqual(fresh["editorial_admissibility"], "allowed")
         self.assertIn("считается новой", fresh["reason"].lower())
+
+    def test_rule_based_planner_marks_transition_and_new_model_modes(self) -> None:
+        """Rule-based planner output should expose repositioning mode for ranking transparency."""
+
+        archive = [
+            _archive_row(
+                days_ago=40,
+                primary_theme="делегирование без хаоса",
+                primary_thesis="Без ролей и ответственности делегирование возвращается в ручной режим.",
+                angle="через зависимость бизнеса от собственника",
+                business_dimensions=["управление", "команда"],
+            )
+        ]
+
+        with patch("telegram_ingest.planner_engine.load_posts", return_value=archive), patch(
+            "telegram_ingest.planner_engine.get_high_priority_open_loops",
+            return_value=[],
+        ), patch("telegram_ingest.planner_engine.load_backlog", return_value=[]), patch(
+            "telegram_ingest.planner_engine.maybe_generate_planner_candidates",
+            return_value=None,
+        ):
+            plan = plan_next_topics()
+
+        modes = {item["theme"]: item["repositioning_mode"] for item in plan["best_next_topics"]}
+        self.assertIn("скрытые потери в операционке", modes)
+        self.assertEqual(modes["скрытые потери в операционке"], "new_model")
+
+    def test_legacy_user_theme_gets_downgraded_by_rule_based_repositioning_logic(self) -> None:
+        """A broad legacy-style theme should stay below sharper transition/new-model recommendations."""
+
+        archive = [
+            _archive_row(
+                days_ago=45,
+                primary_theme="скрытые потери в операционке",
+                primary_thesis="Главные потери бизнеса часто скрыты в процессах.",
+                angle="через переделки и ручной режим",
+                business_dimensions=["операционка", "финансы"],
+            )
+        ]
+
+        with patch("telegram_ingest.planner_engine.load_posts", return_value=archive), patch(
+            "telegram_ingest.planner_engine.get_high_priority_open_loops",
+            return_value=[],
+        ), patch("telegram_ingest.planner_engine.load_backlog", return_value=[]), patch(
+            "telegram_ingest.planner_engine.maybe_generate_planner_candidates",
+            return_value=None,
+        ):
+            plan = plan_next_topics(user_theme="найм сотрудников")
+
+        candidate = next(item for item in plan["best_next_topics"] if item["theme"] == "найм сотрудников")
+        self.assertEqual(candidate["repositioning_mode"], "legacy")
+        self.assertNotEqual(plan["recommended_topic_now"]["theme"], "найм сотрудников")
+
+    def test_planner_exposes_content_plan_roadmap(self) -> None:
+        """Planner output should expose the embedded monthly roadmap."""
+
+        with patch("telegram_ingest.planner_engine.load_posts", return_value=[]), patch(
+            "telegram_ingest.planner_engine.get_high_priority_open_loops",
+            return_value=[],
+        ), patch("telegram_ingest.planner_engine.load_backlog", return_value=[]), patch(
+            "telegram_ingest.planner_engine.maybe_generate_planner_candidates",
+            return_value=None,
+        ):
+            plan = plan_next_topics()
+
+        roadmap = plan.get("content_plan_roadmap") or {}
+        self.assertIn("current_item", roadmap)
+        self.assertIn("next_items", roadmap)
+        self.assertTrue(roadmap.get("current_item"))
+
+    def test_planner_prioritizes_next_roadmap_post_when_feed_is_neutral(self) -> None:
+        """When nothing blocks it, planner should pull the next roadmap item to the top."""
+
+        archive = [
+            _archive_row(
+                days_ago=120,
+                primary_theme="случайная старая тема",
+                primary_thesis="Старый пост вне текущей дорожной карты.",
+                angle="вне новой стратегии",
+                business_dimensions=["управление"],
+                content_role="expert",
+                content_pillar="expert",
+            )
+        ]
+
+        with patch("telegram_ingest.planner_engine.load_posts", return_value=archive), patch(
+            "telegram_ingest.planner_engine.get_high_priority_open_loops",
+            return_value=[],
+        ), patch("telegram_ingest.planner_engine.load_backlog", return_value=[]), patch(
+            "telegram_ingest.planner_engine.maybe_generate_planner_candidates",
+            return_value=None,
+        ):
+            plan = plan_next_topics()
+
+        recommended = plan["recommended_topic_now"]
+        roadmap_current = (plan.get("content_plan_roadmap") or {}).get("current_item") or {}
+        self.assertEqual(recommended["theme"], roadmap_current.get("theme"))
+        self.assertEqual(recommended["repositioning_mode"], "transition")
 
     def test_reframe_explanation_fields_are_present_for_user_theme(self) -> None:
         """User reframe verdict should carry matched context and why-not-fresh explanation when candidate survives."""
