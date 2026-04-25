@@ -146,6 +146,17 @@ def maybe_generate_writer_drafts(payload: dict, count: int = 2) -> list[dict] | 
     post_type = (payload.get("post_type") or "").strip()
     core_idea = (payload.get("core_idea") or "").strip()
 
+    # When post_type is specified, force the LLM to use the type-specific template
+    # by prepending a hard override as the very first line of the system prompt.
+    # This prevents the LLM from defaulting to the longer СТРУКТУРА ПОСТА section.
+    if post_type:
+        type_override = (
+            f"ОБЯЗАТЕЛЬНО: тип поста — {post_type}. "
+            f"Писать строго по шаблону этого типа из раздела «ШАБЛОН ПО ТИПУ ПОСТА». "
+            f"Общая структура из раздела «СТРУКТУРА ПОСТА» — не применяется."
+        )
+        system_prompt = type_override + "\n\n" + system_prompt
+
     post_type_instruction = (
         f"ТИП ПОСТА: {post_type}. "
         "Следуй шаблону этого типа из раздела «ШАБЛОН ПО ТИПУ ПОСТА» системного промпта. "

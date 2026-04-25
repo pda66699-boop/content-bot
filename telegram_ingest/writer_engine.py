@@ -1233,6 +1233,9 @@ def generate_drafts(
     else:
         LOGGER.warning("core_idea generation skipped or failed — drafts will use soft prompt guidance only")
 
+    post_type = (topic_brief or {}).get("post_type") or ""
+    LOGGER.info("generate_drafts: post_type=%s theme=%r", post_type or "(none)", context.theme)
+
     llm_drafts = maybe_generate_writer_drafts(
         {
             "selected_topic": context.theme,
@@ -1255,7 +1258,7 @@ def generate_drafts(
             "knowledge_core_notes": context.terminology_registry,
             "avoid_phrases": context.stop_words,
             "voice_profile": context.style_profile,
-            "post_type": (topic_brief or {}).get("post_type") or "",
+            "post_type": post_type,
             "core_idea": core_idea or "",
             "editorial_feedback": context.editorial_feedback,
             "case_context": context.case_context,
