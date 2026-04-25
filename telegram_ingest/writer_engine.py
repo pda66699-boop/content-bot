@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 
 from .config import MEMORY_DIR, POSTS_INDEX_PATH
-from .hybrid_llm import maybe_generate_writer_drafts
+from .hybrid_llm import generate_core_idea, maybe_generate_writer_drafts
 from .knowledge import load_editorial_feedback, load_terminology_registry
 from .planner_engine import plan_next_topics
 from .positioning import get_positioning_flags, resolve_cta_strategy
@@ -1224,6 +1224,13 @@ def generate_drafts(
     profile = infer_profile(context.theme)
     reference_patterns = extract_reference_patterns(context.reference_posts)
 
+    # Generate the controlling thought before drafts so it acts as a hard constraint.
+    core_idea = generate_core_idea(context.theme, context.angle)
+    if core_idea:
+        LOGGER.info("core_idea generated: %s", core_idea)
+    else:
+        LOGGER.warning("core_idea generation skipped or failed — drafts will use soft prompt guidance only")
+
     llm_drafts = maybe_generate_writer_drafts(
         {
             "selected_topic": context.theme,
@@ -1246,6 +1253,8 @@ def generate_drafts(
             "knowledge_core_notes": context.terminology_registry,
             "avoid_phrases": context.stop_words,
             "voice_profile": context.style_profile,
+            "post_type": (topic_brief or {}).get("post_type") or "",
+            "core_idea": core_idea or "",
             "editorial_feedback": context.editorial_feedback,
             "case_context": context.case_context,
             "topic_brief": topic_brief,

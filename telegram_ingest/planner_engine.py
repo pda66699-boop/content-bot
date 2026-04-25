@@ -15,6 +15,7 @@ from .editorial_metadata import normalize_editorial_metadata
 from .editorial_similarity import classify_topic_novelty
 from .hybrid_llm import maybe_generate_planner_candidates
 from .open_loops import get_high_priority_open_loops
+from .narrative_engine import build_narrative_state, evaluate_candidate_narrative_fit, infer_narrative_role
 from .positioning import BALANCE_RANGES, CTA_BALANCE_RANGES, compute_flagship_fit, get_positioning_flags, resolve_cta_strategy
 
 
@@ -142,14 +143,32 @@ MARKETING_RUBRIC_RANGES = {
     "expert_explainer": {"min": 0.15, "max": 0.30},
 }
 
+STRATEGIC_FORMAT_RANGES = {
+    "case_breakdown": {"min": 0.08, "max": 0.20},
+    "diagnostic_post": {"min": 0.12, "max": 0.24},
+    "provocative_thesis": {"min": 0.08, "max": 0.18},
+    "practical_framework": {"min": 0.08, "max": 0.18},
+    "practice_observation": {"min": 0.08, "max": 0.18},
+    "comparison_post": {"min": 0.04, "max": 0.12},
+    "bridge_post": {"min": 0.08, "max": 0.18},
+    "research_signal": {"min": 0.06, "max": 0.16},
+}
+
 RUBRIC_TARGETS = {
     rubric: round((bounds["min"] + bounds["max"]) / 2, 2)
     for rubric, bounds in MARKETING_RUBRIC_RANGES.items()
 }
 
+STRATEGIC_FORMAT_TARGETS = {
+    item: round((bounds["min"] + bounds["max"]) / 2, 2)
+    for item, bounds in STRATEGIC_FORMAT_RANGES.items()
+}
+
 WEEKLY_PUBLISHING_CAP = 3
 
 RANKING_COMPONENT_WEIGHTS = {
+    "narrative_gap": 2.4,
+    "chain_completion": 2.0,
     "novelty": 1.8,
     "angle_freshness": 1.25,
     "funnel_fit": 0.8,
@@ -165,6 +184,13 @@ NOVELTY_PENALTIES = {
     "reframe_allowed": 34,
     "series_without_continuity": 24,
     "window_repeat_boost": 12,
+}
+
+# Stage 3: keep balance as a constraint, not the main decision driver.
+BALANCE_BONUS_DAMPING = {
+    "pillar": 0.45,
+    "rubric": 0.50,
+    "strategic_format": 0.50,
 }
 
 
@@ -208,6 +234,18 @@ class TopicCandidate:
     novelty_penalty: int = 0
     repeat_penalty: int = 0
     total_penalty: int = 0
+    source_kind: str = "editorial"
+    strategic_format: str = ""
+    post_type: str = ""
+    narrative_role: str = ""
+    narrative_chain_id: str = ""
+    narrative_position_index: int = 0
+    narrative_intent: str = ""
+    narrative_gate: str = "allowed"
+    narrative_reason: str = ""
+    narrative_gap_score: int = 0
+    chain_completion_score: int = 0
+    narrative_priority_score: int = 0
 
 
 RECYCLED_ANGLES = (
@@ -239,7 +277,75 @@ def load_content_roadmap() -> list[dict]:
         data = json.loads(CONTENT_ROADMAP_PATH.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return []
-    return [item for item in data if isinstance(item, dict)]
+
+    raw_items: list[dict] = []
+    if isinstance(data, list):
+        raw_items = [item for item in data if isinstance(item, dict)]
+    elif isinstance(data, dict):
+        # v2 schema: {"weeks": [{"week": 1, "narrative_goal": "...", "posts": [...]}, ...]}
+        if isinstance(data.get("weeks"), list):
+            flattened: list[dict] = []
+            for week_item in data.get("weeks") or []:
+                if not isinstance(week_item, dict):
+                    continue
+                week = int(week_item.get("week") or 0)
+                chain_id = str(
+                    week_item.get("narrative_chain_id")
+                    or week_item.get("chain_id")
+                    or (f"week-{week}" if week else "roadmap-chain")
+                )
+                narrative_goal = str(week_item.get("narrative_goal") or week_item.get("strategic_goal") or "").strip()
+                week_posts = week_item.get("posts") or []
+                if not isinstance(week_posts, list):
+                    continue
+                for idx, post in enumerate(week_posts, start=1):
+                    if not isinstance(post, dict):
+                        continue
+                    flattened.append(
+                        {
+                            **post,
+                            "week": week or int(post.get("week") or 0),
+                            "order": int(post.get("order") or post.get("position") or idx),
+                            "narrative_chain_id": post.get("narrative_chain_id") or chain_id,
+                            "narrative_position_index": int(post.get("narrative_position_index") or post.get("position") or idx),
+                            "strategic_role": post.get("strategic_role") or narrative_goal or post.get("narrative_goal") or "",
+                        }
+                    )
+            raw_items = flattened
+        elif isinstance(data.get("items"), list):
+            raw_items = [item for item in data.get("items") if isinstance(item, dict)]
+        else:
+            raw_items = [data] if data else []
+
+    normalized: list[dict] = []
+    for item in raw_items:
+        week = int(item.get("week") or 0)
+        order = int(item.get("order") or 0)
+        chain_id = str(item.get("narrative_chain_id") or (f"week-{week}" if week else "roadmap-chain"))
+        position = int(item.get("narrative_position_index") or (order if order else len(normalized) + 1))
+        role = str(item.get("narrative_role") or infer_narrative_role(
+            theme=str(item.get("theme") or ""),
+            angle=str(item.get("angle") or ""),
+            content_role=str(item.get("goal") or "expert"),
+            content_pillar=infer_candidate_pillar(
+                str(item.get("theme") or ""),
+                "diagnostic" if str(item.get("goal") or "").lower() in {"lead", "warmup"} else "expert",
+                "soft" if str(item.get("goal") or "").lower() in {"lead", "warmup"} else "optional",
+            ),
+            strategic_format="bridge_post" if str(item.get("repositioning_mode") or "") == "transition" else "practical_framework",
+            cta_need="soft" if str(item.get("goal") or "").lower() in {"lead", "warmup"} else "optional",
+        ))
+        normalized.append(
+            {
+                **item,
+                "week": week,
+                "order": order,
+                "narrative_chain_id": chain_id,
+                "narrative_position_index": position,
+                "narrative_role": role,
+            }
+        )
+    return normalized
 
 
 def recent_rows_by_days(rows: list[dict], days: int) -> list[dict]:
@@ -274,24 +380,113 @@ def topic_overlap_score(topic_a: str, topic_b: str) -> float:
     return len(a & b) / len(a | b)
 
 
-def roadmap_match_score(roadmap_theme: str, row: dict) -> float:
-    return max(
-        topic_overlap_score(roadmap_theme, str(row.get("primary_theme") or "")),
-        topic_overlap_score(roadmap_theme, str(row.get("title_hook") or "")),
+OWNER_DEPENDENCY_MARKERS = (
+    "собственник",
+    "владелец",
+    "без тебя",
+    "без вас",
+    "внимани",
+    "вовлеч",
+    "одном человеке",
+    "решени",
+    "эскалац",
+    "подменяет собой систему",
+    "держится",
+)
+ROADMAP_MATCH_WINDOW_DAYS = 120
+
+
+def _marker_hits(text: str, markers: tuple[str, ...]) -> int:
+    lowered = str(text or "").lower().replace("ё", "е")
+    return sum(1 for marker in markers if marker in lowered)
+
+
+def _parse_row_date(row: dict) -> date | None:
+    raw = str(row.get("published_at") or row.get("date") or "").strip()
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw[:10])
+    except ValueError:
+        return None
+
+
+def _roadmap_recency_bonus(row: dict) -> float:
+    row_date = _parse_row_date(row)
+    if row_date is None:
+        return 0.0
+    age_days = abs((date.today() - row_date).days)
+    if age_days <= 14:
+        return 0.05
+    if age_days <= 45:
+        return 0.035
+    if age_days <= 90:
+        return 0.02
+    if age_days >= 180:
+        return -0.06
+    return 0.0
+
+
+def _is_recent_for_roadmap(row: dict, window_days: int = ROADMAP_MATCH_WINDOW_DAYS) -> bool:
+    row_date = _parse_row_date(row)
+    if row_date is None:
+        return False
+    return abs((date.today() - row_date).days) <= window_days
+
+
+def roadmap_match_score(roadmap_theme: str, row: dict, roadmap_item: dict | None = None) -> float:
+    metadata_fields = (
+        str(row.get("primary_theme") or ""),
+        str(row.get("title_hook") or ""),
+        str(row.get("primary_thesis") or ""),
+        str(row.get("core_thesis") or ""),
+        str(row.get("angle") or ""),
+    )
+    theme_score = max(topic_overlap_score(roadmap_theme, field) for field in metadata_fields)
+    angle_text = str((roadmap_item or {}).get("angle") or "")
+    angle_score = max(topic_overlap_score(angle_text, field) for field in metadata_fields) if angle_text else 0.0
+
+    owner_dependency_bonus = 0.0
+    roadmap_text = " ".join(filter(None, [roadmap_theme, angle_text]))
+    row_text = " ".join(metadata_fields + (str(row.get("body_summary") or ""),))
+    if _marker_hits(roadmap_text, OWNER_DEPENDENCY_MARKERS) >= 2 and _marker_hits(row_text, OWNER_DEPENDENCY_MARKERS) >= 2:
+        owner_dependency_bonus = 0.55
+
+    score = max(theme_score, angle_score, min(1.0, max(theme_score, angle_score) + owner_dependency_bonus))
+    if not row.get("primary_theme") and not row.get("primary_thesis") and not row.get("angle"):
+        score -= 0.05
+    score += _roadmap_recency_bonus(row)
+    return max(0.0, min(1.0, score))
+
+
+def _roadmap_match_sort_key(score: float, row: dict) -> tuple[float, str]:
+    return (
+        float(score),
+        str(row.get("published_at") or row.get("date") or ""),
     )
 
 
 def build_roadmap_state(rows: list[dict], roadmap: list[dict]) -> dict:
     if not roadmap:
-        return {"items": [], "next_items": [], "current_item": None}
+        return {"items": [], "next_items": [], "current_item": None, "chains": [], "current_chain": None}
 
     items: list[dict] = []
-    for item in sorted(roadmap, key=lambda x: int(x.get("order", 999))):
+    for item in sorted(
+        roadmap,
+        key=lambda x: (
+            int(x.get("week", 999)),
+            int(x.get("narrative_position_index", x.get("order", 999))),
+            int(x.get("order", 999)),
+        ),
+    ):
         best_match = None
         best_score = 0.0
-        for row in rows:
-            score = roadmap_match_score(str(item.get("theme") or ""), row)
-            if score > best_score:
+        candidate_rows = [row for row in rows if _is_recent_for_roadmap(row)]
+        if not candidate_rows:
+            candidate_rows = rows
+        for row in candidate_rows:
+            score = roadmap_match_score(str(item.get("theme") or ""), row, item)
+            if best_match is None or _roadmap_match_sort_key(score, row) > _roadmap_match_sort_key(best_score, best_match):
                 best_score = score
                 best_match = row
         completed = best_score >= 0.58
@@ -305,7 +500,38 @@ def build_roadmap_state(rows: list[dict], roadmap: list[dict]) -> dict:
 
     next_items = [item for item in items if not item.get("completed")][:4]
     current_item = next_items[0] if next_items else None
-    return {"items": items, "next_items": next_items, "current_item": current_item}
+    chain_index: dict[str, list[dict]] = {}
+    for item in items:
+        chain_id = str(item.get("narrative_chain_id") or f"week-{int(item.get('week') or 0)}")
+        chain_index.setdefault(chain_id, []).append(item)
+
+    chains: list[dict] = []
+    for chain_id, chain_items in sorted(chain_index.items(), key=lambda pair: min(int(x.get("week") or 999) for x in pair[1])):
+        ordered = sorted(chain_items, key=lambda x: int(x.get("narrative_position_index") or x.get("order") or 999))
+        completed_count = sum(1 for item in ordered if item.get("completed"))
+        next_chain_item = next((item for item in ordered if not item.get("completed")), None)
+        chains.append(
+            {
+                "chain_id": chain_id,
+                "week": int(ordered[0].get("week") or 0),
+                "narrative_goal": ordered[0].get("strategic_role") or "narrative progression",
+                "completed_count": completed_count,
+                "total_count": len(ordered),
+                "is_complete": completed_count == len(ordered),
+                "current_item": next_chain_item,
+                "items": ordered,
+                "required_next_role": None if next_chain_item is None else next_chain_item.get("narrative_role"),
+            }
+        )
+
+    current_chain = next((chain for chain in chains if not chain.get("is_complete")), None)
+    return {
+        "items": items,
+        "next_items": next_items,
+        "current_item": current_item,
+        "chains": chains,
+        "current_chain": current_chain,
+    }
 
 
 def tokenize_topic(text: str) -> list[str]:
@@ -443,6 +669,74 @@ def infer_candidate_rubric(theme: str, content_role: str, content_pillar: str, c
     return "expert_explainer"
 
 
+def infer_post_type(
+    strategic_format: str,
+    content_pillar: str,
+    cta_need: str,
+    source_kind: str,
+    marketing_rubric: str,
+) -> str:
+    """Map internal taxonomy fields to one of 7 human-readable post types."""
+    if source_kind in {"verified_case", "case_research"} or strategic_format == "case_breakdown":
+        return "case"
+    if content_pillar == "conversational" or strategic_format == "practice_observation":
+        return "personal_insight"
+    if cta_need in {"soft", "hard"} and marketing_rubric in {"flagship_warmup", "diagnostic_entry"}:
+        return "soft_sell"
+    if strategic_format == "provocative_thesis":
+        return "provocation"
+    if strategic_format == "research_signal":
+        return "authority_breakdown"
+    if content_pillar == "money" and marketing_rubric == "diagnostic_entry":
+        return "loss_calculator"
+    return "pain_breakdown"
+
+
+def infer_strategic_format(
+    theme: str,
+    content_role: str,
+    content_pillar: str,
+    angle: str = "",
+    repositioning_mode: str = "transition",
+    source_kind: str | None = None,
+    cta_need: str = "optional",
+) -> str:
+    combined = normalize_topic(f"{theme} {angle}")
+    normalized_role = (content_role or "").lower()
+    normalized_source = (source_kind or "").lower()
+
+    if normalized_source in {"verified_case", "case_research"} or normalized_role == "case":
+        return "case_breakdown"
+    if normalized_source in {"industry_research", "market_research", "trend_report", "stat_signal"}:
+        return "research_signal"
+    if content_pillar == "conversational" or normalized_role in {"image", "reflective", "personal", "conversation"}:
+        return "practice_observation"
+    if any(token in combined for token in ("как думает", "vs", "против", "что реально происходит", "на деле")):
+        return "comparison_post"
+    if any(token in combined for token in ("диагност", "признак", "вопрос", "чек", "проверь")) or cta_need in {"soft", "hard"}:
+        return "diagnostic_post"
+    if any(token in combined for token in ("не ", "дорог", "иллюз", "маскировк", "приговор")):
+        return "provocative_thesis"
+    if repositioning_mode == "transition":
+        return "bridge_post"
+    if any(token in combined for token in ("3 ", "5 ", "фрейм", "схем", "разлож", "механик")):
+        return "practical_framework"
+    return "practical_framework"
+
+
+def strategic_format_rebalance_bonus(strategic_format: str, feed_state: dict) -> int:
+    need = feed_state.get("strategic_format_needs", {}).get(strategic_format, 0.0)
+    if need >= 0.10:
+        return 7
+    if need >= 0.05:
+        return 4
+    if need <= -0.10:
+        return -5
+    if need <= -0.05:
+        return -2
+    return 0
+
+
 def rubric_rebalance_bonus(rubric: str, feed_state: dict) -> int:
     need = feed_state.get("rubric_needs", {}).get(rubric, 0.0)
     if need >= 0.12:
@@ -549,16 +843,29 @@ def _dedupe_reason_fragments(text: str) -> str:
 def enrich_candidate_with_balance(candidate: TopicCandidate, feed_state: dict, campaign_mode: str) -> TopicCandidate:
     pillar = candidate.content_pillar or infer_candidate_pillar(candidate.theme, candidate.content_role, candidate.cta_need)
     repositioning_mode = candidate.repositioning_mode or infer_repositioning_mode(candidate.theme, candidate.angle, candidate.why_now)
-    bonus = pillar_rebalance_bonus(pillar, feed_state)
+    strategic_format = candidate.strategic_format or infer_strategic_format(
+        candidate.theme,
+        candidate.content_role,
+        pillar,
+        candidate.angle,
+        repositioning_mode,
+        candidate.source_kind,
+        candidate.cta_need,
+    )
+    raw_pillar_bonus = pillar_rebalance_bonus(pillar, feed_state)
+    bonus = int(round(raw_pillar_bonus * BALANCE_BONUS_DAMPING["pillar"]))
     campaign_bonus, campaign_reason = campaign_score_bonus(candidate, campaign_mode)
     cta_strategy = resolve_cta_strategy(candidate.theme, pillar, campaign_mode)
     flagship_fit = compute_flagship_fit(candidate.theme, candidate.angle, pillar)
     rubric = candidate.marketing_rubric or infer_candidate_rubric(candidate.theme, candidate.content_role, pillar, candidate.cta_need)
-    rubric_bonus = rubric_rebalance_bonus(rubric, feed_state)
+    raw_rubric_bonus = rubric_rebalance_bonus(rubric, feed_state)
+    raw_format_bonus = strategic_format_rebalance_bonus(strategic_format, feed_state)
+    rubric_bonus = int(round(raw_rubric_bonus * BALANCE_BONUS_DAMPING["rubric"]))
+    format_bonus = int(round(raw_format_bonus * BALANCE_BONUS_DAMPING["strategic_format"]))
     mode_bonus = repositioning_penalty(repositioning_mode)
-    score = candidate.score + bonus + campaign_bonus + flagship_fit["score"] + rubric_bonus + mode_bonus
+    score = candidate.score + bonus + campaign_bonus + flagship_fit["score"] + rubric_bonus + format_bonus + mode_bonus
     why_now = candidate.why_now
-    if bonus > 0:
+    if raw_pillar_bonus > 0:
         pillar_labels = {
             "expert": "экспертный",
             "conversational": "разговорный",
@@ -569,8 +876,10 @@ def enrich_candidate_with_balance(candidate: TopicCandidate, feed_state: dict, c
         why_now = f"{why_now}; {campaign_reason}"
     if flagship_fit["score"] >= 10 and candidate.content_pillar != "conversational":
         why_now = f"{why_now}; тема хорошо поддерживает флагман «45 дней»"
-    if rubric_bonus > 0:
+    if raw_rubric_bonus > 0:
         why_now = f"{why_now}; такого формата сейчас не хватает в ленте"
+    if raw_format_bonus > 0:
+        why_now = f"{why_now}; этот стратегический формат сейчас недобран в контент-плане"
     if repositioning_mode == "new_model":
         why_now = f"{why_now}; тема уже живёт в новой модели позиционирования"
     elif repositioning_mode == "transition":
@@ -617,6 +926,24 @@ def enrich_candidate_with_balance(candidate: TopicCandidate, feed_state: dict, c
         novelty_penalty=candidate.novelty_penalty,
         repeat_penalty=candidate.repeat_penalty,
         total_penalty=candidate.total_penalty,
+        source_kind=candidate.source_kind,
+        strategic_format=strategic_format,
+        post_type=infer_post_type(
+            strategic_format=strategic_format,
+            content_pillar=pillar,
+            cta_need=cta_strategy["preferred_cta_need"] if candidate.cta_need != "none" else "none",
+            source_kind=candidate.source_kind or "",
+            marketing_rubric=rubric,
+        ),
+        narrative_role=candidate.narrative_role,
+        narrative_chain_id=candidate.narrative_chain_id,
+        narrative_position_index=candidate.narrative_position_index,
+        narrative_intent=candidate.narrative_intent,
+        narrative_gate=candidate.narrative_gate,
+        narrative_reason=candidate.narrative_reason,
+        narrative_gap_score=candidate.narrative_gap_score,
+        chain_completion_score=candidate.chain_completion_score,
+        narrative_priority_score=candidate.narrative_priority_score,
     )
 
 
@@ -694,6 +1021,17 @@ def _conversion_relevance_score(candidate: TopicCandidate, campaign_mode: str) -
     if candidate.cta_need in {"soft", "hard"}:
         return 7
     return 3
+
+
+def _narrative_position_index(narrative_state: dict) -> int:
+    last_roles = narrative_state.get("last_roles") or []
+    current_chain_id = narrative_state.get("current_chain_id") or ""
+    if not last_roles:
+        return 1
+    # Position index is local to active chain and resets after CTA.
+    if current_chain_id:
+        return len(last_roles) + 1
+    return len(last_roles) + 1
 
 
 def _continuity_component(candidate: TopicCandidate, continuity_confirmed: bool) -> int:
@@ -787,6 +1125,25 @@ def enrich_candidate_with_semantics(
     utility_score = _utility_score(candidate, feed_state)
     conversion_score = _conversion_relevance_score(candidate, campaign_mode)
     slot_fit_score = score_candidate_against_slot(metadata, recommended_slot or {})
+    narrative_state = feed_state.get("narrative_state") or {}
+    inferred_narrative_role = candidate.narrative_role or infer_narrative_role(
+        theme=candidate.theme,
+        angle=candidate.angle,
+        content_role=candidate.content_role,
+        content_pillar=candidate.content_pillar,
+        marketing_rubric=candidate.marketing_rubric,
+        strategic_format=candidate.strategic_format,
+        cta_need=candidate.cta_need,
+    )
+    narrative_fit = evaluate_candidate_narrative_fit(
+        role=inferred_narrative_role,
+        narrative_state=narrative_state,
+        campaign_mode=campaign_mode,
+        cta_need=candidate.cta_need,
+    )
+    narrative_gap_score = int(narrative_fit.get("narrative_gap_score") or 0)
+    chain_completion_score = int(narrative_fit.get("chain_completion_score") or 0)
+    narrative_priority_score = int(narrative_fit.get("narrative_priority_score") or 0)
     editorial_gate, continuity_confirmed, continuity_evidence = evaluate_editorial_gate(
         candidate,
         novelty,
@@ -814,9 +1171,13 @@ def enrich_candidate_with_semantics(
     weighted_conversion = _weighted_component(conversion_score, "conversion_relevance")
     weighted_slot = _weighted_component(slot_fit_score, "slot_fit")
     weighted_continuity = _weighted_component(continuity_component, "continuity")
+    weighted_narrative_gap = _weighted_component(narrative_gap_score, "narrative_gap")
+    weighted_chain_completion = _weighted_component(chain_completion_score, "chain_completion")
 
     score = (
         candidate.score
+        + weighted_narrative_gap
+        + weighted_chain_completion
         + weighted_novelty
         + weighted_angle
         + weighted_funnel
@@ -827,6 +1188,8 @@ def enrich_candidate_with_semantics(
         + weighted_continuity
         - total_penalty
     )
+    if narrative_fit.get("narrative_gate") == "forbidden":
+        score -= 120
     score = apply_editorial_score_caps(score, novelty_status, editorial_gate, continuity_confirmed)
 
     return TopicCandidate(
@@ -858,6 +1221,9 @@ def enrich_candidate_with_semantics(
         utility_score=weighted_utility,
         conversion_relevance_score=weighted_conversion,
         slot_fit_score=weighted_slot,
+        narrative_gap_score=weighted_narrative_gap,
+        chain_completion_score=weighted_chain_completion,
+        narrative_priority_score=narrative_priority_score,
         editorial_gate=editorial_gate,
         continuity_confirmed=continuity_confirmed,
         continuity_evidence=continuity_evidence,
@@ -868,6 +1234,22 @@ def enrich_candidate_with_semantics(
         novelty_penalty=novelty_penalty,
         repeat_penalty=repeat_penalty,
         total_penalty=total_penalty,
+        source_kind=candidate.source_kind,
+        strategic_format=candidate.strategic_format or infer_strategic_format(
+            candidate.theme,
+            candidate.content_role,
+            candidate.content_pillar,
+            candidate.angle,
+            candidate.repositioning_mode,
+            candidate.source_kind,
+            candidate.cta_need,
+        ),
+        narrative_role=inferred_narrative_role,
+        narrative_chain_id=str(narrative_state.get("current_chain_id") or ""),
+        narrative_position_index=_narrative_position_index(narrative_state),
+        narrative_intent=str(narrative_fit.get("narrative_intent") or ""),
+        narrative_gate=str(narrative_fit.get("narrative_gate") or "allowed"),
+        narrative_reason=str(narrative_fit.get("narrative_reason") or ""),
     )
 
 
@@ -1037,9 +1419,14 @@ def gate_priority(candidate: TopicCandidate) -> int:
 def rank_admissible_candidates(candidates: list[TopicCandidate]) -> list[TopicCandidate]:
     """Apply editorial gate first, then rank only admissible candidates."""
 
-    admissible = [candidate for candidate in candidates if candidate.editorial_gate != "disallowed"]
+    admissible = [
+        candidate
+        for candidate in candidates
+        if candidate.editorial_gate != "disallowed" and candidate.narrative_gate != "forbidden"
+    ]
     admissible.sort(
         key=lambda candidate: (
+            candidate.narrative_priority_score,
             gate_priority(candidate),
             candidate.score,
             1 if candidate.novelty_status == "fresh" else 0,
@@ -1049,6 +1436,103 @@ def rank_admissible_candidates(candidates: list[TopicCandidate]) -> list[TopicCa
         reverse=True,
     )
     return admissible
+
+
+def _weekly_observation_required(feed_state: dict, slots_left: int) -> bool:
+    if slots_left <= 0:
+        return False
+    if int(feed_state.get("recent_window_size", 0) or 0) < 3:
+        return False
+    if slots_left >= 3:
+        return (
+            feed_state.get("pillar_needs", {}).get("conversational", 0.0) > 0.04
+            or feed_state.get("strategic_format_needs", {}).get("practice_observation", 0.0) > 0.03
+        )
+    return feed_state.get("pillar_needs", {}).get("conversational", 0.0) > 0.10
+
+
+def _weekly_evidence_required(feed_state: dict, slots_left: int) -> bool:
+    if slots_left <= 0:
+        return False
+    if int(feed_state.get("recent_window_size", 0) or 0) < 3:
+        return False
+    case_need = feed_state.get("strategic_format_needs", {}).get("case_breakdown", 0.0)
+    research_need = feed_state.get("strategic_format_needs", {}).get("research_signal", 0.0)
+    rubric_case_need = feed_state.get("rubric_needs", {}).get("case", 0.0)
+    if slots_left >= 3:
+        return case_need > 0.02 or research_need > 0.02 or rubric_case_need > 0.04
+    return case_need > 0.08 or research_need > 0.08 or rubric_case_need > 0.08
+
+
+def _pick_first_matching(
+    pool: list[TopicCandidate],
+    selected_keys: set[str],
+    predicate,
+) -> TopicCandidate | None:
+    for candidate in pool:
+        key = normalize_topic(candidate.theme)
+        if key in selected_keys:
+            continue
+        if predicate(candidate):
+            return candidate
+    return None
+
+
+def build_weekly_plan_candidates(
+    candidates: list[TopicCandidate],
+    slots_left: int,
+    feed_state: dict,
+) -> list[TopicCandidate]:
+    if slots_left <= 0 or not candidates:
+        return []
+
+    selected: list[TopicCandidate] = []
+    selected_keys: set[str] = set()
+    narrative_state = feed_state.get("narrative_state") or {}
+    next_required_role = (
+        str(feed_state.get("roadmap_required_role") or "").strip().lower()
+        or str(narrative_state.get("next_required_role") or "").strip().lower()
+    )
+
+    # Narrative priority first: start weekly plan from the required role when available.
+    if next_required_role:
+        candidate = _pick_first_matching(
+            candidates,
+            selected_keys,
+            lambda item: (item.narrative_role or "").lower() == next_required_role,
+        )
+        if candidate is not None:
+            selected.append(candidate)
+            selected_keys.add(normalize_topic(candidate.theme))
+
+    if _weekly_observation_required(feed_state, slots_left):
+        candidate = _pick_first_matching(
+            candidates,
+            selected_keys,
+            lambda item: item.content_pillar == "conversational" or item.strategic_format == "practice_observation",
+        )
+        if candidate is not None:
+            selected.append(candidate)
+            selected_keys.add(normalize_topic(candidate.theme))
+
+    if len(selected) < slots_left and _weekly_evidence_required(feed_state, slots_left):
+        candidate = _pick_first_matching(
+            candidates,
+            selected_keys,
+            lambda item: item.strategic_format in {"case_breakdown", "research_signal"} or item.source_kind in {"verified_case", "case_research", "industry_research", "market_research", "trend_report", "stat_signal"},
+        )
+        if candidate is not None:
+            selected.append(candidate)
+            selected_keys.add(normalize_topic(candidate.theme))
+
+    while len(selected) < slots_left:
+        candidate = _pick_first_matching(candidates, selected_keys, lambda item: True)
+        if candidate is None:
+            break
+        selected.append(candidate)
+        selected_keys.add(normalize_topic(candidate.theme))
+
+    return selected
 
 
 def apply_user_theme_verdict(candidate: TopicCandidate, user_verdict: dict) -> TopicCandidate:
@@ -1078,8 +1562,8 @@ def apply_user_theme_verdict(candidate: TopicCandidate, user_verdict: dict) -> T
 
 def build_feed_state(rows: list[dict]) -> dict:
     recent = rows[-12:]
-    weekly = recent_rows_by_days(rows, 7) or rows[-7:]
-    feedback_window = recent_rows_by_days(rows, 21) or rows[-21:]
+    weekly = recent_rows_by_days(rows, 7)
+    feedback_window = recent_rows_by_days(rows, 21)
     recent_topics = [row.get("primary_theme") for row in recent if row.get("primary_theme")]
     recent_roles = [row.get("content_role") for row in recent if row.get("content_role")]
     ai_recent = sum(int(row.get("mentions_ai", False)) for row in recent)
@@ -1106,10 +1590,30 @@ def build_feed_state(rows: list[dict]) -> dict:
 
     cta_counts = Counter(normalize_cta_target(row) for row in recent)
     rubric_counts = Counter(classify_post_rubric(row) for row in recent)
+    strategic_format_counts = Counter(
+        infer_strategic_format(
+            str(row.get("primary_theme") or row.get("title_hook") or ""),
+            str(row.get("content_role") or "expert"),
+            classify_post_pillar(row),
+            str(row.get("angle") or ""),
+            infer_repositioning_mode(
+                str(row.get("primary_theme") or row.get("title_hook") or ""),
+                str(row.get("angle") or ""),
+                str(row.get("body_summary") or ""),
+            ),
+            str(((row.get("context") or {}).get("source_kind") if isinstance(row.get("context"), dict) else row.get("source")) or row.get("source_kind") or ""),
+            "soft" if normalize_cta_target(row) == "diagnostic" else "optional",
+        )
+        for row in recent
+    )
     total = len(recent) or 1
     pillar_ratios = {pillar: pillar_counts.get(pillar, 0) / total for pillar in CONTENT_PILLAR_TARGETS}
     cta_ratios = {cta: cta_counts.get(cta, 0) / total for cta in CTA_BALANCE_RANGES}
     rubric_ratios = {rubric: rubric_counts.get(rubric, 0) / total for rubric in RUBRIC_TARGETS}
+    strategic_format_ratios = {
+        item: strategic_format_counts.get(item, 0) / total
+        for item in STRATEGIC_FORMAT_TARGETS
+    }
     pillar_needs: dict[str, float] = {}
     for pillar, bounds in BALANCE_RANGES.items():
         ratio = pillar_ratios.get(pillar, 0)
@@ -1139,6 +1643,15 @@ def build_feed_state(rows: list[dict]) -> dict:
             rubric_needs[rubric] = round(bounds["max"] - ratio, 3)
         else:
             rubric_needs[rubric] = round(RUBRIC_TARGETS[rubric] - ratio, 3)
+    strategic_format_needs: dict[str, float] = {}
+    for item, bounds in STRATEGIC_FORMAT_RANGES.items():
+        ratio = strategic_format_ratios.get(item, 0)
+        if ratio < bounds["min"]:
+            strategic_format_needs[item] = round(bounds["min"] - ratio, 3)
+        elif ratio > bounds["max"]:
+            strategic_format_needs[item] = round(bounds["max"] - ratio, 3)
+        else:
+            strategic_format_needs[item] = round(STRATEGIC_FORMAT_TARGETS[item] - ratio, 3)
 
     weekly_stage_counts: Counter[str] = Counter()
     weekly_flagship_fit = {"warmup": 0, "diagnostic_entry": 0, "trust": 0}
@@ -1176,6 +1689,34 @@ def build_feed_state(rows: list[dict]) -> dict:
 
     published_last_7_days = len(weekly)
     weekly_slots_left = max(0, WEEKLY_PUBLISHING_CAP - published_last_7_days)
+    recent_with_roles: list[dict] = []
+    for row in recent:
+        if row.get("narrative_role"):
+            recent_with_roles.append(row)
+            continue
+        inferred_role = infer_narrative_role(
+            theme=str(row.get("primary_theme") or row.get("title_hook") or ""),
+            angle=str(row.get("angle") or ""),
+            content_role=str(row.get("content_role") or "expert"),
+            content_pillar=classify_post_pillar(row),
+            marketing_rubric=classify_post_rubric(row),
+            strategic_format=infer_strategic_format(
+                str(row.get("primary_theme") or row.get("title_hook") or ""),
+                str(row.get("content_role") or "expert"),
+                classify_post_pillar(row),
+                str(row.get("angle") or ""),
+                infer_repositioning_mode(
+                    str(row.get("primary_theme") or row.get("title_hook") or ""),
+                    str(row.get("angle") or ""),
+                    str(row.get("body_summary") or ""),
+                ),
+                str(((row.get("context") or {}).get("source_kind") if isinstance(row.get("context"), dict) else row.get("source")) or row.get("source_kind") or ""),
+                "soft" if normalize_cta_target(row) == "diagnostic" else "optional",
+            ),
+        )
+        recent_with_roles.append({**row, "narrative_role": inferred_role})
+
+    narrative_state = build_narrative_state(recent_with_roles)
 
     return {
         "recent_window_size": len(recent),
@@ -1197,6 +1738,10 @@ def build_feed_state(rows: list[dict]) -> dict:
         "rubric_ratios": rubric_ratios,
         "rubric_needs": rubric_needs,
         "rubric_ranges": MARKETING_RUBRIC_RANGES,
+        "strategic_format_counts": dict(strategic_format_counts),
+        "strategic_format_ratios": strategic_format_ratios,
+        "strategic_format_needs": strategic_format_needs,
+        "strategic_format_ranges": STRATEGIC_FORMAT_RANGES,
         "weekly_stage_counts": dict(weekly_stage_counts),
         "weekly_offer_balance": weekly_flagship_fit,
         "published_last_7_days": published_last_7_days,
@@ -1208,6 +1753,7 @@ def build_feed_state(rows: list[dict]) -> dict:
         "feedback_cta_counts": dict(feedback_cta_counts),
         "feedback_stage_counts": dict(feedback_stage_counts),
         "feedback_notes": feedback_notes,
+        "narrative_state": narrative_state,
     }
 
 
@@ -1279,6 +1825,8 @@ def pick_default_candidates(feed_state: dict, rows: list[dict], exclude_topics: 
     backlog_topics = load_backlog()
     campaign_mode = get_positioning_flags().get("campaign_mode", "base")
     roadmap_state = build_roadmap_state(rows, load_content_roadmap())
+    narrative_state = feed_state.get("narrative_state") or {}
+    required_role = str(feed_state.get("roadmap_required_role") or "").lower() or str(narrative_state.get("next_required_role") or "").lower()
 
     for idx, item in enumerate(roadmap_state.get("next_items", [])[:4]):
         topic = item.get("theme")
@@ -1286,16 +1834,22 @@ def pick_default_candidates(feed_state: dict, rows: list[dict], exclude_topics: 
             continue
         content_role = "diagnostic" if item.get("goal") in {"lead", "warmup"} else "expert"
         cta_need = "soft" if item.get("goal") == "lead" else "optional"
+        item_role = str(item.get("narrative_role") or "").lower()
+        role_bonus = 90 if required_role and item_role == required_role else 0
         candidates.append(
             TopicCandidate(
                 theme=topic,
                 angle=str(item.get("angle") or "подать тему по editorial roadmap"),
-                score=420 - idx * 80,
+                score=420 - idx * 80 + role_bonus,
                 why_now=f"это следующий шаг редакционного roadmap: неделя {item.get('week')}, пост {item.get('order')}",
                 content_role=content_role,
                 cta_need=cta_need,
                 content_pillar=infer_candidate_pillar(topic, content_role, cta_need),
                 repositioning_mode=str(item.get("repositioning_mode") or infer_repositioning_mode(topic, str(item.get("angle") or ""), str(item.get("strategic_role") or ""))),
+                narrative_role=str(item.get("narrative_role") or ""),
+                narrative_chain_id=str(item.get("narrative_chain_id") or ""),
+                narrative_position_index=int(item.get("narrative_position_index") or item.get("order") or 0),
+                narrative_intent="roadmap_progression",
             )
         )
 
@@ -1440,6 +1994,87 @@ def pick_default_candidates(feed_state: dict, rows: list[dict], exclude_topics: 
             ]
         )
 
+    if feed_state.get("strategic_format_needs", {}).get("case_breakdown", 0) > 0.05 or feed_state.get("rubric_needs", {}).get("case", 0) > 0.06:
+        candidates.extend(
+            [
+                TopicCandidate(
+                    theme="Ford: как еженедельный ритм управления и единые KPI возвращают управляемость",
+                    angle="разобрать подтверждённый кейс через ритм управления, прозрачность статусов и персональную ответственность",
+                    score=86,
+                    why_now="в ленте не хватает кейсов, которые показывают системные изменения через конкретный управленческий механизм",
+                    content_role="case",
+                    cta_need="optional",
+                    content_pillar="expert",
+                    marketing_rubric="case",
+                    repositioning_mode="new_model",
+                    source_kind="verified_case",
+                    strategic_format="case_breakdown",
+                ),
+                TopicCandidate(
+                    theme="Starbucks: как возврат к стандартам и операционной дисциплине помогает вернуть прибыль",
+                    angle="показать, что рост возвращается не из новой магии, а из стандартов, контроля качества и упрощения операций",
+                    score=84,
+                    why_now="такой кейс хорошо заземляет позиционирование: не теория, а разбор управленческого разворота с понятным эффектом",
+                    content_role="case",
+                    cta_need="optional",
+                    content_pillar="money",
+                    marketing_rubric="case",
+                    repositioning_mode="new_model",
+                    source_kind="verified_case",
+                    strategic_format="case_breakdown",
+                ),
+            ]
+        )
+
+    if feed_state.get("strategic_format_needs", {}).get("research_signal", 0) > 0.05:
+        candidates.extend(
+            [
+                TopicCandidate(
+                    theme="Что исследования по process improvement говорят о снижении затрат и скорости",
+                    angle="собрать рыночный сигнал через диапазоны эффектов: затраты, цикл, производительность, а затем перевести это на язык сервисного бизнеса",
+                    score=82,
+                    why_now="в контент-плане не хватает research-сигналов и статистики, которые усиливают доказательность для скептичной аудитории",
+                    content_role="expert",
+                    cta_need="optional",
+                    content_pillar="money",
+                    marketing_rubric="expert_explainer",
+                    repositioning_mode="new_model",
+                    source_kind="industry_research",
+                    strategic_format="research_signal",
+                ),
+                TopicCandidate(
+                    theme="Почему Lean и короткий управленческий ритм дают эффект даже без большой цифровизации",
+                    angle="показать на исследованиях и зрелых практиках, что порядок в процессах и короткие совещания часто дают больший эффект, чем новая технология сама по себе",
+                    score=79,
+                    why_now="это добавляет в ленту формат исследования и поддерживает линию «сначала управленческая система, потом инструменты»",
+                    content_role="expert",
+                    cta_need="optional",
+                    content_pillar="expert",
+                    marketing_rubric="expert_explainer",
+                    repositioning_mode="transition",
+                    source_kind="industry_research",
+                    strategic_format="research_signal",
+                ),
+            ]
+        )
+
+    if feed_state.get("strategic_format_needs", {}).get("comparison_post", 0) > 0.04:
+        candidates.append(
+            TopicCandidate(
+                theme="Как думает собственник vs что реально происходит, когда прибыль плавает",
+                angle="построить пост как контраст между привычным объяснением «рынок виноват» и реальными управленческими потерями внутри исполнения",
+                score=78,
+                why_now="в ленте полезно вернуть формат сравнения, который хорошо делает смысловой разворот и не скатывается в сухую методичку",
+                content_role="expert",
+                cta_need="optional",
+                content_pillar="money",
+                marketing_rubric="mistake_breakdown",
+                repositioning_mode="transition",
+                source_kind="editorial",
+                strategic_format="comparison_post",
+            )
+        )
+
     deduped: list[TopicCandidate] = []
     seen = set()
     balanced_candidates = [enrich_candidate_with_balance(candidate, feed_state, campaign_mode) for candidate in candidates]
@@ -1468,7 +2103,7 @@ def pick_default_candidates(feed_state: dict, rows: list[dict], exclude_topics: 
                 break
 
     deduped.sort(key=lambda item: item.score, reverse=True)
-    return deduped[:8]
+    return deduped[:12]
 
 
 def evaluate_user_theme(user_theme: str, rows: list[dict], feed_state: dict) -> dict:
@@ -1640,6 +2275,10 @@ def merge_llm_candidates(
                 recommended_format=item.get("recommended_format") or item.get("format_type") or "expert",
                 recommended_cta_type=item.get("recommended_cta_type") or "none",
                 content_goal=item.get("content_goal") or item.get("content_role") or "expert",
+                source_kind=item.get("source_kind") or "editorial",
+                strategic_format=item.get("strategic_format") or "",
+                narrative_role=(item.get("narrative_role") or "").strip(),
+                narrative_intent=(item.get("narrative_intent") or "").strip(),
             )
         )
         seen.add(normalized)
@@ -1659,7 +2298,7 @@ def merge_llm_candidates(
             continue
         deduped.append(candidate)
         dedup_seen.add(normalized)
-    return deduped[:8]
+    return deduped[:12]
 
 
 def plan_next_topics(
@@ -1678,6 +2317,9 @@ def plan_next_topics(
     campaign_mode = positioning_flags.get("campaign_mode", "base")
     recommended_slot = recommend_content_plan_slot(feed_coverage, campaign_mode=campaign_mode)
     roadmap_state = build_roadmap_state(rows, load_content_roadmap())
+    roadmap_required_role = str((roadmap_state.get("current_chain") or {}).get("required_next_role") or "").strip().lower()
+    if roadmap_required_role:
+        feed_state["roadmap_required_role"] = roadmap_required_role
 
     best_next_topics = pick_default_candidates(feed_state, rows, exclude_topics=set(exclude_topics or []))
     best_next_topics = [
@@ -1737,7 +2379,7 @@ def plan_next_topics(
             enriched_user_candidate = apply_user_theme_verdict(enriched_user_candidate, user_verdict)
             best_next_topics = rank_admissible_candidates(
                 [enriched_user_candidate] + [topic for topic in best_next_topics if topic.theme != user_candidate.theme]
-            )[:8]
+            )[:12]
 
     current_feed_state = (
         f"Последние {feed_state['recent_window_size']} постов содержат {feed_state['ai_recent_count']} ИИ-постов "
@@ -1787,6 +2429,8 @@ def plan_next_topics(
                     "allowed_reframes": item.allowed_reframes,
                     "recommended_format": item.recommended_format,
                     "recommended_cta_type": item.recommended_cta_type,
+                    "source_kind": item.source_kind,
+                    "strategic_format": item.strategic_format,
                 }
                 for item in best_next_topics
             ],
@@ -1803,9 +2447,16 @@ def plan_next_topics(
         recommended_slot=recommended_slot,
     )
 
-    recommended_topic = best_next_topics[0] if best_next_topics else None
+    if enriched_user_candidate is not None and user_verdict.get("status") == "reframe":
+        normalized_user_theme = normalize_topic(enriched_user_candidate.theme)
+        best_next_topics = [
+            item for item in best_next_topics
+            if normalize_topic(item.theme) != normalized_user_theme
+        ]
+
     slots_left = feed_state.get("weekly_slots_left", WEEKLY_PUBLISHING_CAP)
-    weekly_plan_candidates = best_next_topics[:slots_left] if slots_left > 0 else []
+    weekly_plan_candidates = build_weekly_plan_candidates(best_next_topics, slots_left, feed_state)
+    recommended_topic = weekly_plan_candidates[0] if weekly_plan_candidates else (best_next_topics[0] if best_next_topics else None)
     return {
         "business_goal": business_goal,
         "positioning_flags": positioning_flags,
@@ -1816,6 +2467,8 @@ def plan_next_topics(
             "current_item": roadmap_state.get("current_item"),
             "next_items": roadmap_state.get("next_items"),
             "items": roadmap_state.get("items"),
+            "current_chain": roadmap_state.get("current_chain"),
+            "chains": roadmap_state.get("chains"),
         },
         "recent_topics_closed": feed_state["recent_topics"][-5:],
         "open_loops": open_loops[:5],
@@ -1838,10 +2491,17 @@ def plan_next_topics(
             "recent_ratios": feed_state["rubric_ratios"],
             "needs": feed_state["rubric_needs"],
         },
+        "strategic_format_balance": {
+            "ranges": STRATEGIC_FORMAT_RANGES,
+            "recent_counts": feed_state["strategic_format_counts"],
+            "recent_ratios": feed_state["strategic_format_ratios"],
+            "needs": feed_state["strategic_format_needs"],
+        },
         "weekly_funnel": {
             "stage_counts": feed_state["weekly_stage_counts"],
             "offer_balance": feed_state["weekly_offer_balance"],
         },
+        "narrative_state": feed_state.get("narrative_state") or {},
         "publishing_cadence": {
             "weekly_cap": feed_state["weekly_cap"],
             "published_last_7_days": feed_state["published_last_7_days"],
@@ -1881,8 +2541,18 @@ def plan_next_topics(
                 "allowed_reframes": item.allowed_reframes,
                 "recommended_format": item.recommended_format,
                 "recommended_cta_type": item.recommended_cta_type,
+                "source_kind": item.source_kind,
+                "strategic_format": item.strategic_format,
+                "narrative_role": item.narrative_role,
+                "narrative_chain_id": item.narrative_chain_id,
+                "narrative_position_index": item.narrative_position_index,
+                "narrative_intent": item.narrative_intent,
+                "narrative_gate": item.narrative_gate,
+                "narrative_reason": item.narrative_reason,
                 "slot_fit_score": item.slot_fit_score,
                 "score_breakdown": {
+                    "narrative_gap_component": item.narrative_gap_score,
+                    "chain_completion_component": item.chain_completion_score,
                     "novelty_component": item.novelty_score,
                     "angle_freshness_component": item.angle_freshness_score,
                     "funnel_fit_component": item.funnel_fit_score,
@@ -1920,7 +2590,15 @@ def plan_next_topics(
             "novelty_penalty": enriched_user_candidate.novelty_penalty,
             "repeat_penalty": enriched_user_candidate.repeat_penalty,
             "total_penalty": enriched_user_candidate.total_penalty,
+            "narrative_role": enriched_user_candidate.narrative_role,
+            "narrative_chain_id": enriched_user_candidate.narrative_chain_id,
+            "narrative_position_index": enriched_user_candidate.narrative_position_index,
+            "narrative_intent": enriched_user_candidate.narrative_intent,
+            "narrative_gate": enriched_user_candidate.narrative_gate,
+            "narrative_reason": enriched_user_candidate.narrative_reason,
             "score_breakdown": {
+                "narrative_gap_component": enriched_user_candidate.narrative_gap_score,
+                "chain_completion_component": enriched_user_candidate.chain_completion_score,
                 "novelty_component": enriched_user_candidate.novelty_score,
                 "angle_freshness_component": enriched_user_candidate.angle_freshness_score,
                 "funnel_fit_component": enriched_user_candidate.funnel_fit_score,
@@ -1964,6 +2642,14 @@ def plan_next_topics(
                 "allowed_reframes": item.allowed_reframes,
                 "recommended_format": item.recommended_format,
                 "recommended_cta_type": item.recommended_cta_type,
+                "source_kind": item.source_kind,
+                "strategic_format": item.strategic_format,
+                "narrative_role": item.narrative_role,
+                "narrative_chain_id": item.narrative_chain_id,
+                "narrative_position_index": item.narrative_position_index,
+                "narrative_intent": item.narrative_intent,
+                "narrative_gate": item.narrative_gate,
+                "narrative_reason": item.narrative_reason,
                 "novelty_score": item.novelty_score,
                 "angle_freshness_score": item.angle_freshness_score,
                 "funnel_fit_score": item.funnel_fit_score,
@@ -1972,10 +2658,13 @@ def plan_next_topics(
                 "conversion_relevance_score": item.conversion_relevance_score,
                 "continuity_component": item.continuity_component,
                 "slot_fit_score": item.slot_fit_score,
+                "narrative_priority_score": item.narrative_priority_score,
                 "novelty_penalty": item.novelty_penalty,
                 "repeat_penalty": item.repeat_penalty,
                 "total_penalty": item.total_penalty,
                 "score_breakdown": {
+                    "narrative_gap_component": item.narrative_gap_score,
+                    "chain_completion_component": item.chain_completion_score,
                     "novelty_component": item.novelty_score,
                     "angle_freshness_component": item.angle_freshness_score,
                     "funnel_fit_component": item.funnel_fit_score,
@@ -2022,7 +2711,17 @@ def plan_next_topics(
             "allowed_reframes": recommended_topic.allowed_reframes,
             "recommended_format": recommended_topic.recommended_format,
             "recommended_cta_type": recommended_topic.recommended_cta_type,
+            "source_kind": recommended_topic.source_kind,
+            "strategic_format": recommended_topic.strategic_format,
+            "narrative_role": recommended_topic.narrative_role,
+            "narrative_chain_id": recommended_topic.narrative_chain_id,
+            "narrative_position_index": recommended_topic.narrative_position_index,
+            "narrative_intent": recommended_topic.narrative_intent,
+            "narrative_gate": recommended_topic.narrative_gate,
+            "narrative_reason": recommended_topic.narrative_reason,
             "score_breakdown": {
+                "narrative_gap_component": recommended_topic.narrative_gap_score,
+                "chain_completion_component": recommended_topic.chain_completion_score,
                 "novelty_component": recommended_topic.novelty_score,
                 "angle_freshness_component": recommended_topic.angle_freshness_score,
                 "funnel_fit_component": recommended_topic.funnel_fit_score,
@@ -2045,6 +2744,8 @@ def plan_next_topics(
         "recommended_angle": None if recommended_topic is None else recommended_topic.angle,
         "recommended_format": None if recommended_topic is None else recommended_topic.recommended_format,
         "recommended_cta_type": None if recommended_topic is None else recommended_topic.recommended_cta_type,
+        "source_kind": None if recommended_topic is None else recommended_topic.source_kind,
+        "strategic_format": None if recommended_topic is None else recommended_topic.strategic_format,
         "cta_need": None if recommended_topic is None else recommended_topic.cta_need,
         "user_theme_verdict": user_verdict,
     }

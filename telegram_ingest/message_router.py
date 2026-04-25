@@ -308,6 +308,7 @@ def persist_accepted_post_from_session(chat_id: int | str, user_id: int | None, 
         "business_dimensions": topic_brief.get("business_dimensions") or [],
         "format_type": topic_brief.get("format_type") or topic_brief.get("recommended_format") or "expert",
         "novelty_window_days": topic_brief.get("novelty_window_days") or 30,
+        "post_type": topic_brief.get("post_type") or "",
     }
 
     record = infer_editorial_metadata_from_post(base_card, prefer_llm=False)
@@ -348,6 +349,8 @@ def format_feed_analytics() -> str:
     content_balance = plan.get("content_balance") or {}
     cta_balance = plan.get("cta_balance") or {}
     rubric_balance = plan.get("rubric_balance") or {}
+    strategic_format_balance = plan.get("strategic_format_balance") or {}
+    narrative_state = plan.get("narrative_state") or {}
     weekly_funnel = plan.get("weekly_funnel") or {}
     publishing_cadence = plan.get("publishing_cadence") or {}
     publication_feedback = plan.get("publication_feedback") or {}
@@ -356,9 +359,12 @@ def format_feed_analytics() -> str:
     roadmap_current = roadmap.get("current_item") or {}
     roadmap_next = roadmap.get("next_items") or []
     roadmap_items = roadmap.get("items") or []
+    roadmap_current_chain = roadmap.get("current_chain") or {}
+    roadmap_chains = roadmap.get("chains") or []
     needs = content_balance.get("needs") or {}
     cta_needs = cta_balance.get("needs") or {}
     rubric_needs = rubric_balance.get("needs") or {}
+    strategic_format_needs = strategic_format_balance.get("needs") or {}
     campaign_mode = (plan.get("positioning_flags") or {}).get("campaign_mode") or "base"
 
     pillar_labels = {
@@ -398,6 +404,44 @@ def format_feed_analytics() -> str:
         "personal": "Личка",
         "none": "Без CTA",
     }
+    strategic_format_labels = {
+        "case_breakdown": "Разбор кейса",
+        "diagnostic_post": "Диагностический пост",
+        "provocative_thesis": "Провокационный тезис",
+        "practical_framework": "Практический фрейм",
+        "practice_observation": "Наблюдение из практики",
+        "comparison_post": "Сравнение",
+        "bridge_post": "Пост-переход",
+        "research_signal": "Исследование/тенденция",
+    }
+    narrative_role_labels = {
+        "trust": "Trust",
+        "pain": "Pain",
+        "reframe": "Reframe",
+        "solution": "Solution",
+        "tool": "Tool",
+        "proof": "Proof",
+        "bridge": "Bridge",
+        "cta": "CTA",
+    }
+    lines.append("")
+    lines.append("<b>🧱 Баланс стратегических форматов:</b>")
+    for format_key, label in strategic_format_labels.items():
+        count = int((strategic_format_balance.get("recent_counts") or {}).get(format_key, 0))
+        ratio = round(((strategic_format_balance.get("recent_ratios") or {}).get(format_key, 0)) * 100)
+        lines.append(f"– {label}: {count} ({ratio}%)")
+
+    strategic_missing = [
+        strategic_format_labels[key]
+        for key, value in strategic_format_needs.items()
+        if value > 0.05 and key in strategic_format_labels
+    ]
+    if strategic_missing:
+        lines.append("")
+        lines.append("<b>🧩 Чего не хватает по форматам:</b>")
+        for item in strategic_missing[:4]:
+            lines.append(f"– {item}")
+
     lines.append("")
     lines.append("<b>🧲 Баланс CTA:</b>")
     for cta_key in ("comments", "diagnostic", "personal", "none"):
@@ -474,19 +518,40 @@ def format_feed_analytics() -> str:
         lines.append("– Явных провалов по реальному набору публикаций сейчас не вижу")
 
     lines.append("")
+    lines.append("<b>🧠 Narrative state:</b>")
+    next_role = str(narrative_state.get("next_required_role") or "")
+    current_stage = str(narrative_state.get("current_stage") or "")
+    last_roles = [narrative_role_labels.get(role, role) for role in (narrative_state.get("last_roles") or [])[-6:]]
+    lines.append(f"– Текущий этап: {html.escape(current_stage or 'n/a')}")
+    lines.append(f"– Следующая обязательная роль: {html.escape(narrative_role_labels.get(next_role, next_role) or 'n/a')}")
+    if last_roles:
+        lines.append(f"– Последние роли: {html.escape(' -> '.join(last_roles))}")
+    else:
+        lines.append("– Последние роли: n/a")
+
+    lines.append("")
     lines.append("<b>🗓 Что ставить в недельный план:</b>")
     if weekly_plan:
         for idx, item in enumerate(weekly_plan, start=1):
             lines.append(
                 f"– {idx}. {html.escape(item.get('theme') or '')} "
                 f"({html.escape(RUBRIC_LABELS.get(item.get('marketing_rubric'), item.get('marketing_rubric') or 'Не определена'))} · "
-                f"{html.escape(item.get('funnel_stage') or 'Не определена')})"
+                f"{html.escape(item.get('funnel_stage') or 'Не определена')} · "
+                f"{html.escape(narrative_role_labels.get(str(item.get('narrative_role') or ''), str(item.get('narrative_role') or 'n/a')))} )"
             )
     else:
         lines.append("– Лимит недели уже закрыт. Лучше не форсировать лишний пост без сильной причины.")
 
     lines.append("")
     lines.append("<b>🧭 Месячный roadmap:</b>")
+    if roadmap_current_chain:
+        lines.append(
+            f"– Активная цепь: {html.escape(str(roadmap_current_chain.get('chain_id') or 'n/a'))} "
+            f"({int(roadmap_current_chain.get('completed_count') or 0)}/{int(roadmap_current_chain.get('total_count') or 0)})"
+        )
+        lines.append(f"– Narrative goal: {html.escape(str(roadmap_current_chain.get('narrative_goal') or 'n/a'))}")
+        if roadmap_current_chain.get("required_next_role"):
+            lines.append(f"– Следующая роль в цепи: {html.escape(str(roadmap_current_chain.get('required_next_role') or 'n/a'))}")
     if roadmap_current:
         lines.append(
             f"– Текущий шаг: неделя {int(roadmap_current.get('week', 0))}, "
@@ -506,7 +571,7 @@ def format_feed_analytics() -> str:
             lines.append(
                 f"– W{int(item.get('week', 0))}/P{int(item.get('order', 0))}: "
                 f"{html.escape(item.get('theme') or '')} "
-                f"({html.escape(item.get('repositioning_mode') or 'не указан')})"
+                f"({html.escape(item.get('repositioning_mode') or 'не указан')} · role={html.escape(str(item.get('narrative_role') or 'n/a'))})"
             )
 
     completed_items = [item for item in roadmap_items if item.get("completed")]
@@ -568,6 +633,9 @@ def format_feed_analytics() -> str:
         lines.append(
             f"– Тип: {html.escape(pillar_labels.get(recommendation.get('content_pillar'), recommendation.get('content_pillar') or 'Не определён'))}"
         )
+        lines.append(
+            f"– Narrative role: {html.escape(narrative_role_labels.get(str(recommendation.get('narrative_role') or ''), str(recommendation.get('narrative_role') or 'n/a')))}"
+        )
         lines.append(f"– Рубрика: {html.escape(RUBRIC_LABELS.get(recommendation.get('marketing_rubric'), recommendation.get('marketing_rubric') or 'Не определена'))}")
         lines.append(f"– Стадия воронки: {html.escape(recommendation.get('funnel_stage') or 'Не определена')}")
         lines.append(f"– Почему сейчас: {html.escape(recommendation.get('why_now') or '')}")
@@ -581,10 +649,22 @@ def format_roadmap_overview() -> str:
     current_item = roadmap.get("current_item") or {}
     next_items = roadmap.get("next_items") or []
     items = roadmap.get("items") or []
+    current_chain = roadmap.get("current_chain") or {}
+    chains = roadmap.get("chains") or []
     if not items:
         return "🗺 Roadmap пока не загружен или ещё не рассчитан."
 
     lines = ["<b>🗺 Месячный roadmap</b>"]
+    if current_chain:
+        lines.append("")
+        lines.append("<b>Активная narrative-цепь</b>")
+        lines.append(f"– Chain: {html.escape(str(current_chain.get('chain_id') or 'n/a'))}")
+        lines.append(
+            f"– Прогресс: {int(current_chain.get('completed_count') or 0)}/{int(current_chain.get('total_count') or 0)}"
+        )
+        lines.append(f"– Narrative goal: {html.escape(str(current_chain.get('narrative_goal') or 'n/a'))}")
+        if current_chain.get("required_next_role"):
+            lines.append(f"– Следующая роль: {html.escape(str(current_chain.get('required_next_role') or 'n/a'))}")
     if current_item:
         lines.append("")
         lines.append("<b>Текущий шаг</b>")
@@ -594,7 +674,8 @@ def format_roadmap_overview() -> str:
         )
         lines.append(
             f"– Режим: {html.escape(current_item.get('repositioning_mode') or 'не указан')} · "
-            f"Цель: {html.escape(current_item.get('goal') or 'не указана')}"
+            f"Цель: {html.escape(current_item.get('goal') or 'не указана')} · "
+            f"Role: {html.escape(str(current_item.get('narrative_role') or 'n/a'))}"
         )
     else:
         lines.append("")
@@ -607,7 +688,17 @@ def format_roadmap_overview() -> str:
             lines.append(
                 f"– W{int(item.get('week', 0))}/P{int(item.get('order', 0))}: "
                 f"{html.escape(item.get('theme') or '')} "
-                f"({html.escape(item.get('repositioning_mode') or 'не указан')})"
+                f"({html.escape(item.get('repositioning_mode') or 'не указан')} · role={html.escape(str(item.get('narrative_role') or 'n/a'))})"
+            )
+
+    if chains:
+        lines.append("")
+        lines.append("<b>Цепи по неделям</b>")
+        for chain in chains[:6]:
+            lines.append(
+                f"– {html.escape(str(chain.get('chain_id') or 'n/a'))}: "
+                f"{int(chain.get('completed_count') or 0)}/{int(chain.get('total_count') or 0)} "
+                f"(next role: {html.escape(str(chain.get('required_next_role') or '-'))})"
             )
 
     completed = [item for item in items if item.get("completed")]
@@ -938,8 +1029,41 @@ def format_five_topics(session: dict, exclude_history: bool = False) -> tuple[st
         exclude_topics.extend(session.get("suggested_topics_history", []))
         exclude_topics.extend(session.get("generated_themes_history", []))
     plan = plan_next_topics(exclude_topics=exclude_topics)
-    topics = sorted(plan.get("best_next_topics", [])[:5], key=lambda item: item.get("score", 0), reverse=True)
+    topics: list[dict] = []
+    seen_themes: set[str] = set()
+
+    for item in plan.get("weekly_plan", []) or []:
+        theme = (item.get("theme") or "").strip().lower()
+        if not theme or theme in seen_themes:
+            continue
+        topics.append(item)
+        seen_themes.add(theme)
+        if len(topics) >= 5:
+            break
+
+    if len(topics) < 5:
+        ranked_topics = sorted(plan.get("best_next_topics", []), key=lambda item: item.get("score", 0), reverse=True)
+        for item in ranked_topics:
+            theme = (item.get("theme") or "").strip().lower()
+            if not theme or theme in seen_themes:
+                continue
+            topics.append(item)
+            seen_themes.add(theme)
+            if len(topics) >= 5:
+                break
+    # Keep weekly-first selection logic, but display topics in strict priority order.
+    topics = sorted(topics, key=lambda item: int(item.get("score") or 0), reverse=True)
     cta_balance = plan.get("cta_balance") or {}
+    narrative_role_labels = {
+        "trust": "Trust",
+        "pain": "Pain",
+        "reframe": "Reframe",
+        "solution": "Solution",
+        "tool": "Tool",
+        "proof": "Proof",
+        "bridge": "Bridge",
+        "cta": "CTA",
+    }
     percent_map = build_topic_percent_map(topics)
     lines = ["<b>✨ Пять уместных тем на сейчас:</b>"]
     for idx, topic in enumerate(topics, start=1):
@@ -953,6 +1077,7 @@ def format_five_topics(session: dict, exclude_history: bool = False) -> tuple[st
             lines.append(f"⚠️ <i>Но:</i> {html.escape(caution)}")
         lines.append(f"🧩 <b>Что будет в посте:</b> {html.escape(build_topic_preview(topic))}")
         lines.append(f"🏷 <b>Рубрика:</b> {html.escape(RUBRIC_LABELS.get(topic.get('marketing_rubric'), topic.get('marketing_rubric') or 'Не определена'))}")
+        lines.append(f"🧠 <b>Narrative role:</b> {html.escape(narrative_role_labels.get(str(topic.get('narrative_role') or ''), str(topic.get('narrative_role') or 'n/a')))}")
         lines.append(f"🪜 <b>Стадия воронки:</b> {html.escape(topic.get('funnel_stage') or 'Не определена')}")
         lines.append(f"🎯 <b>Угол:</b> {html.escape(topic.get('angle') or '')}")
         lines.append(f"🧲 <b>CTA:</b> {html.escape(cta_label)}")

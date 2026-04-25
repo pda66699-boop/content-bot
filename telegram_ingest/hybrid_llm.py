@@ -77,6 +77,55 @@ def maybe_generate_planner_candidates(payload: dict) -> list[dict] | None:
     return [item for item in candidates if isinstance(item, dict)]
 
 
+_POST_TYPE_CHAR_LIMITS: dict[str, int] = {
+    "pain_breakdown": 1200,
+    "case": 1500,
+    "provocation": 900,
+    "loss_calculator": 800,
+    "authority_breakdown": 1400,
+    "personal_insight": 1000,
+    "soft_sell": 1000,
+}
+
+
+def _char_limit_for_type(post_type: str) -> int:
+    return _POST_TYPE_CHAR_LIMITS.get(post_type, 1200)
+
+
+def generate_core_idea(topic: str, angle: str) -> str | None:
+    """One cheap LLM call: returns the single controlling thought for the post.
+
+    Used as a hard constraint passed into maybe_generate_writer_drafts so the
+    main generation call cannot drift off-topic.
+    """
+    if not llm_available():
+        return None
+
+    system_prompt = (
+        "Ты помогаешь сформулировать главную мысль Telegram-поста для канала "
+        "Дениса Педченко — консультанта по управленческим потерям в сервисных "
+        "бизнесах 60–150 млн ₽/год. "
+        "Ответ — строго одно предложение, максимум 20 слов, без вводных слов. "
+        "Это не заголовок и не тезис — это точная управленческая мысль, "
+        "которой подчинён весь пост. Верни только JSON."
+    )
+    user_prompt = json.dumps(
+        {
+            "topic": topic,
+            "angle": angle,
+            "required_output_format": {"core_idea": "одно предложение, максимум 20 слов"},
+        },
+        ensure_ascii=False,
+    )
+    response = complete_json(system_prompt, user_prompt, temperature=0.7)
+    if not response:
+        return None
+    idea = response.get("core_idea")
+    if not isinstance(idea, str) or not idea.strip():
+        return None
+    return idea.strip()
+
+
 def maybe_generate_writer_drafts(payload: dict, count: int = 2) -> list[dict] | None:
     if not llm_available():
         return None
@@ -94,23 +143,41 @@ def maybe_generate_writer_drafts(payload: dict, count: int = 2) -> list[dict] | 
             entry["hook"] = ref["title_hook"]
         style_refs_full.append(entry)
 
+    post_type = (payload.get("post_type") or "").strip()
+    core_idea = (payload.get("core_idea") or "").strip()
+
+    post_type_instruction = (
+        f"ТИП ПОСТА: {post_type}. "
+        "Следуй шаблону этого типа из раздела «ШАБЛОН ПО ТИПУ ПОСТА» системного промпта. "
+        if post_type
+        else ""
+    )
+    core_idea_constraint = (
+        f"ГЛАВНАЯ МЫСЛЬ (жёсткое ограничение): «{core_idea}». "
+        "Весь пост работает только на эту мысль. Всё, что на неё не работает — убрать. "
+        if core_idea
+        else ""
+    )
+    char_limit = _char_limit_for_type(post_type)
+
     user_prompt = json.dumps(
         {
             "task": (
                 f"Сделай {count} разных черновика поста на одну тему. "
                 "Каждый черновик должен заметно отличаться по заходу и ритму. "
                 "Строго следуй правилам стиля из системного промпта. "
-                "ОБЯЗАТЕЛЬНО: перед текстом поста сформулируй одну главную мысль в поле core_idea. "
-                "ОБЯЗАТЕЛЬНО: пост заканчивается ровно ОДНОЙ финальной фразой-выводом. "
+                + post_type_instruction
+                + core_idea_constraint
+                + "ОБЯЗАТЕЛЬНО: пост заканчивается ровно ОДНОЙ финальной фразой-выводом. "
                 "НЕТ 'Итог:', НЕТ 'Жёсткий вывод:' после уже написанного вывода — пост не пересказывает себя в конце. "
-                "ОБЯЗАТЕЛЬНО: длина текста не более 1200 знаков с пробелами. "
-                "Если текст длиннее — сократить: убрать вводные обороты, убрать повторы мысли, оставить 3 пункта списка вместо 5."
+                f"ОБЯЗАТЕЛЬНО: длина текста не более {char_limit} знаков с пробелами. "
+                "Если длиннее — сократить: убрать вводные обороты, убрать повторы мысли, оставить 3 пункта списка вместо 5."
             ),
             "required_output_format": {
                 "drafts": [
                     {
-                        "core_idea": "одна главная мысль поста одним предложением",
-                        "text": "полный текст поста, строго до 1200 знаков",
+                        "core_idea": core_idea or "одна главная мысль поста одним предложением",
+                        "text": f"полный текст поста, строго до {char_limit} знаков",
                         "hook_type": "тип хука: negation|observation|paradox|personal",
                         "char_count": "примерное число знаков с пробелами",
                     }
@@ -121,6 +188,7 @@ def maybe_generate_writer_drafts(payload: dict, count: int = 2) -> list[dict] | 
             "goal": payload.get("goal"),
             "content_role": payload.get("content_role"),
             "cta_policy": payload.get("cta_policy"),
+            "post_type": post_type or None,
             "style_references": style_refs_full,
             "knowledge_core_notes": payload.get("knowledge_core_notes"),
             "avoid_phrases": payload.get("avoid_phrases"),
