@@ -130,6 +130,9 @@ class PlannerSemanticLayerTests(unittest.TestCase):
         self.assertIn("matched_primary_thesis", candidate)
         self.assertIn("why_not_fresh", candidate)
         self.assertIn("repositioning_mode", candidate)
+        self.assertIn("strategic_format_balance", plan)
+        self.assertIn("strategic_format", candidate)
+        self.assertIn("source_kind", candidate)
 
     def test_near_duplicate_topic_does_not_rank_above_fresh_topic(self) -> None:
         """A reframe-only topic should not outrank a genuinely fresh candidate."""
@@ -311,7 +314,9 @@ class PlannerSemanticLayerTests(unittest.TestCase):
         ):
             plan = plan_next_topics(user_theme="найм сотрудников")
 
-        candidate = next(item for item in plan["best_next_topics"] if item["theme"] == "найм сотрудников")
+        candidate = plan["user_theme_analysis"]
+        self.assertIsNotNone(candidate)
+        self.assertEqual(candidate["theme"], "найм сотрудников")
         self.assertEqual(candidate["repositioning_mode"], "legacy")
         self.assertNotEqual(plan["recommended_topic_now"]["theme"], "найм сотрудников")
 
@@ -360,6 +365,63 @@ class PlannerSemanticLayerTests(unittest.TestCase):
         roadmap_current = (plan.get("content_plan_roadmap") or {}).get("current_item") or {}
         self.assertEqual(recommended["theme"], roadmap_current.get("theme"))
         self.assertEqual(recommended["repositioning_mode"], "transition")
+
+    def test_weekly_plan_enforces_observation_and_evidence_quota_when_deficit_is_visible(self) -> None:
+        """Weekly plan should include an observation slot and a case/research slot when both layers are underused."""
+
+        archive = [
+            _archive_row(
+                days_ago=40,
+                primary_theme="оргструктура и роли",
+                primary_thesis="Без ролей и ответственности управляемость не появляется.",
+                angle="через перегрузку собственника",
+                business_dimensions=["управление"],
+                content_role="expert",
+                content_pillar="expert",
+            ),
+            _archive_row(
+                days_ago=41,
+                primary_theme="делегирование без системы",
+                primary_thesis="Делегирование без контроля делает хаос дороже.",
+                angle="через ручной режим собственника",
+                business_dimensions=["управление"],
+                content_role="expert",
+                content_pillar="expert",
+            ),
+            _archive_row(
+                days_ago=42,
+                primary_theme="регламенты и процессы",
+                primary_thesis="Процессы без владельца результата не работают.",
+                angle="через зависимость от собственника",
+                business_dimensions=["управление"],
+                content_role="expert",
+                content_pillar="expert",
+            ),
+            _archive_row(
+                days_ago=43,
+                primary_theme="контроль исполнения",
+                primary_thesis="Без короткого ритма контроля управляемость рассеивается.",
+                angle="через управленческий ритм",
+                business_dimensions=["управление"],
+                content_role="expert",
+                content_pillar="expert",
+            ),
+        ]
+
+        with patch("telegram_ingest.planner_engine.load_posts", return_value=archive), patch(
+            "telegram_ingest.planner_engine.get_high_priority_open_loops",
+            return_value=[],
+        ), patch("telegram_ingest.planner_engine.load_backlog", return_value=[]), patch(
+            "telegram_ingest.planner_engine.maybe_generate_planner_candidates",
+            return_value=None,
+        ):
+            plan = plan_next_topics()
+
+        weekly_plan = plan["weekly_plan"]
+        strategic_formats = [item["strategic_format"] for item in weekly_plan]
+        self.assertIn("practice_observation", strategic_formats)
+        self.assertTrue(any(item in {"case_breakdown", "research_signal"} for item in strategic_formats))
+        self.assertIn(plan["recommended_topic_now"]["theme"], [item["theme"] for item in weekly_plan])
 
     def test_reframe_explanation_fields_are_present_for_user_theme(self) -> None:
         """User reframe verdict should carry matched context and why-not-fresh explanation when candidate survives."""

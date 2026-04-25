@@ -15,6 +15,7 @@ from .planner_engine import (
     build_feed_state,
     enrich_candidate_with_balance,
     enrich_candidate_with_semantics,
+    gate_priority,
     humanize_editorial_admissibility,
     infer_planner_metadata,
     infer_candidate_pillar,
@@ -22,6 +23,7 @@ from .planner_engine import (
     plan_next_topics,
     rank_admissible_candidates,
 )
+from .narrative_engine import infer_narrative_role
 from .feed_coverage import analyze_feed_coverage, recommend_content_plan_slot
 from .open_loops import get_high_priority_open_loops
 from .positioning import get_positioning_flags
@@ -269,6 +271,17 @@ def _build_manual_topic_candidate(topic: str) -> TopicCandidate:
     content_goal = metadata.get("content_goal") or "expert"
     pillar = infer_candidate_pillar(topic, content_goal, "optional")
     rubric = infer_candidate_rubric(topic, content_goal, pillar, "optional")
+    # Manual batch review compares topics semantically; use a theme-only narrative role
+    # so synthetic planner defaults do not mark every candidate as a forbidden "solution".
+    narrative_role = infer_narrative_role(
+        theme=topic,
+        angle="",
+        content_role=content_goal,
+        content_pillar=pillar,
+        marketing_rubric="",
+        strategic_format="",
+        cta_need="optional",
+    )
     return TopicCandidate(
         theme=topic,
         angle=metadata.get("angle") or "подать тему через системную причину и один практический вывод",
@@ -284,6 +297,7 @@ def _build_manual_topic_candidate(topic: str) -> TopicCandidate:
         business_dimensions=metadata.get("business_dimensions") or [],
         format_type=metadata.get("format_type") or "expert",
         content_goal=content_goal,
+        narrative_role=narrative_role,
     )
 
 
@@ -360,7 +374,22 @@ def build_planner_batch_review(
         )
         for topic in cleaned_topics
     ]
-    ranked = rank_admissible_candidates(candidates)
+    ranked = [
+        candidate
+        for candidate in candidates
+        if candidate.editorial_gate != "disallowed" and candidate.narrative_gate != "forbidden"
+    ]
+    ranked.sort(
+        key=lambda candidate: (
+            gate_priority(candidate),
+            candidate.score,
+            1 if candidate.novelty_status == "fresh" else 0,
+            candidate.slot_fit_score,
+            candidate.novelty_score,
+            candidate.narrative_priority_score,
+        ),
+        reverse=True,
+    )
     ranked_rows = []
     for index, candidate in enumerate(ranked, start=1):
         row = _serialize_planner_candidate(candidate, rows)

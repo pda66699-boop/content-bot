@@ -346,6 +346,97 @@ def detect_voice_authenticity_risk(
     return "low", None
 
 
+TOPIC_ALIGNMENT_STOP_TOKENS = {
+    "если",
+    "когда",
+    "почему",
+    "котор",
+    "который",
+    "которое",
+    "которые",
+    "это",
+    "этот",
+    "эта",
+    "эти",
+    "самый",
+    "самом",
+    "самого",
+    "даже",
+    "почти",
+    "часто",
+    "через",
+    "между",
+    "после",
+    "вас",
+    "вам",
+    "вашем",
+    "вашего",
+    "вашим",
+    "ваша",
+    "ваше",
+    "ваши",
+    "много",
+    "всего",
+    "пост",
+    "тема",
+    "бизнес",
+    "система",
+    "компания",
+}
+
+OFF_TOPIC_REFLECTIVE_MARKERS = (
+    "выйти из нее",
+    "выйти из неё",
+    "вернуться в работу",
+    "лучший способ вернуться",
+    "отдых",
+    "уехать на 3 дня",
+    "уехать на три дня",
+)
+
+
+def _extract_alignment_stems(*parts: str | None) -> list[str]:
+    tokens: list[str] = []
+    for part in parts:
+        normalized = normalize(part or "")
+        for token in re.findall(r"[a-zа-яё0-9]+", normalized):
+            if len(token) < 4:
+                continue
+            if token in TOPIC_ALIGNMENT_STOP_TOKENS:
+                continue
+            stem = token[:6]
+            if stem not in tokens:
+                tokens.append(stem)
+    return tokens
+
+
+def detect_topic_alignment_risk(
+    text: str,
+    selected_theme: str | None = None,
+    selected_angle: str | None = None,
+) -> tuple[str, str | None]:
+    if not selected_theme and not selected_angle:
+        return "low", None
+
+    normalized_text = normalize(text)
+    expected_stems = _extract_alignment_stems(selected_theme, selected_angle)
+    if not expected_stems:
+        return "low", None
+
+    hit_count = sum(int(stem in normalized_text) for stem in expected_stems)
+    off_topic_hits = sum(int(marker in normalized_text) for marker in OFF_TOPIC_REFLECTIVE_MARKERS)
+
+    if hit_count == 0:
+        return "high", "Текст уехал от выбранной темы: в финальном варианте почти не видно опорных слов и смысла из выбранного сюжета."
+    if hit_count == 1 and len(expected_stems) >= 4:
+        return "medium", "Текст слишком слабо держится за выбранную тему или угол: есть риск, что читатель увидит другой пост, а не тот, который был выбран."
+    if off_topic_hits >= 2 and hit_count <= 2:
+        return "high", "Текст сместился в соседний разговорный сюжет и перестал точно раскрывать выбранную тему."
+    if off_topic_hits >= 1 and hit_count <= 2:
+        return "medium", "В тексте появился соседний сюжет, который начинает перетягивать внимание с выбранной темы."
+    return "low", None
+
+
 def detect_funnel_fit_note(text: str) -> str | None:
     normalized = normalize(text)
     if any(token in normalized for token in ("стад", "кризис", "жизненного цикла")) and "@adizesbizbot" not in normalized:
@@ -462,7 +553,27 @@ def critic_review_with_rows(text: str, rows: list[dict] | None = None) -> dict:
     }
 
 
-def critic_review(text: str) -> dict:
+def critic_review(
+    text: str,
+    selected_theme: str | None = None,
+    selected_angle: str | None = None,
+) -> dict:
     """Return critic diagnostics for one draft post using the stored archive."""
 
-    return critic_review_with_rows(text)
+    review = critic_review_with_rows(text)
+    topic_alignment_risk, topic_alignment_note = detect_topic_alignment_risk(
+        text,
+        selected_theme=selected_theme,
+        selected_angle=selected_angle,
+    )
+    review["topic_alignment_risk"] = topic_alignment_risk
+    review["topic_alignment_note"] = topic_alignment_note
+    if topic_alignment_risk == "medium":
+        review["method_risk"] = "medium"
+    if topic_alignment_risk == "high":
+        review["method_risk"] = "medium"
+        review["verdict"] = "rewrite"
+        guidance = review.get("rewrite_guidance") or ""
+        extra = "Вернуть текст в выбранную тему и угол: не уходить в соседний сюжет, даже если он звучит живее."
+        review["rewrite_guidance"] = f"{guidance} {extra}".strip()
+    return review

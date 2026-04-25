@@ -134,7 +134,11 @@ def apply_paragraph_terminal_period_policy(text: str, keep_ratio: float = 0.15) 
     return "\n\n".join(updated)
 
 
-def polish_text(text: str) -> dict:
+def polish_text(
+    text: str,
+    selected_theme: str | None = None,
+    selected_angle: str | None = None,
+) -> dict:
     style_profile = load_style_profile()
     user_preferences = load_user_preferences()
     positioning_flags = get_positioning_flags()
@@ -150,7 +154,7 @@ def polish_text(text: str) -> dict:
     )
     polished = normalize_spacing(polished)
 
-    review = critic_review(polished)
+    review = critic_review(polished, selected_theme=selected_theme, selected_angle=selected_angle)
     return {
         "positioning_flags": positioning_flags,
         "style_profile": style_profile,

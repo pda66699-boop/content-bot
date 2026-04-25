@@ -52,6 +52,10 @@ def score_draft(critic: dict, text: str, cta_need: str) -> int:
         score -= 10
     if critic.get("corporate_jargon_risk") == "high":
         score -= 20
+    if critic.get("topic_alignment_risk") == "medium":
+        score -= 22
+    if critic.get("topic_alignment_risk") == "high":
+        score -= 48
 
     length = len(text)
     if length < 900:
@@ -73,7 +77,11 @@ def choose_best_variant(drafts_payload: dict, exclude_variants: set[int] | None 
     for draft in drafts_payload["drafts"]:
         if draft["variant"] in exclude_variants:
             continue
-        polished_payload = polish_text(draft["text"])
+        polished_payload = polish_text(
+            draft["text"],
+            selected_theme=drafts_payload.get("selected_theme"),
+            selected_angle=drafts_payload.get("selected_angle"),
+        )
         polished_text_value = polished_payload["polished_text"]
         critic = polished_payload["critic_review"]
         score = score_draft(critic, polished_text_value, draft["cta_need"])
