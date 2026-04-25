@@ -12,6 +12,8 @@ from .knowledge import load_editorial_feedback, load_terminology_registry
 from .planner_engine import plan_next_topics
 from .positioning import get_positioning_flags, resolve_cta_strategy
 
+LOGGER = logging.getLogger(__name__)
+
 
 CTA_LIBRARY = {
     "optional": [
