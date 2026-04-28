@@ -1096,11 +1096,34 @@ def build_case_draft(context: DraftContext, variant: int) -> str:
     return finalize_text(parts, hashtag)
 
 
+def _remove_sentences_with_triggers(text: str, triggers: list[str]) -> str:
+    """Remove entire sentences that contain any of the trigger substrings.
+
+    Splitting on sentence-ending punctuation keeps paragraphs intact:
+    we split inside each paragraph, then rejoin.
+    """
+    if not triggers:
+        return text
+    paragraphs = text.split("\n\n")
+    result_paragraphs: list[str] = []
+    for paragraph in paragraphs:
+        # Split on sentence boundaries (. ! ?) followed by a space or end of paragraph.
+        sentences = re.split(r"(?<=[.!?])\s+", paragraph)
+        kept: list[str] = []
+        for sentence in sentences:
+            lower = sentence.lower()
+            if any(trigger in lower for trigger in triggers):
+                continue  # drop entire sentence
+            kept.append(sentence)
+        result_paragraphs.append(" ".join(kept))
+    # Drop empty paragraphs produced by removing all sentences from a paragraph.
+    result_paragraphs = [p for p in result_paragraphs if p.strip()]
+    return "\n\n".join(result_paragraphs)
+
+
 def apply_stop_word_guard(text: str, stop_words: dict) -> str:
     cleaned = text
     # Only replace with genuinely better alternatives.
-    # Do NOT replace one AI-ism with a different AI-ism —
-    # that was the source of "Если копнуть глубже, дело не в поверхности".
     replacements = {
         "архитектура управления": "управленческая логика",
         "контур управления": "управление",
@@ -1108,11 +1131,21 @@ def apply_stop_word_guard(text: str, stop_words: dict) -> str:
     }
     for old, new in replacements.items():
         cleaned = re.sub(re.escape(old), new, cleaned, flags=re.IGNORECASE)
-    for phrase in stop_words.get("template_phrases_to_avoid", []):
-        pattern = re.compile(r"(?:^|[\s])" + re.escape(phrase) + r"(?:[.:]?\s*)", re.IGNORECASE)
-        cleaned = pattern.sub("", cleaned)
-    cleaned = re.sub(r"^\.\s*", "", cleaned, flags=re.MULTILINE)
-    cleaned = re.sub(r"\n\.\s*", "\n", cleaned)
+
+    # Remove entire sentences that contain any forbidden fragment.
+    # This replaces the old phrase-only regex that left broken fragments.
+    all_triggers: list[str] = [
+        p.lower() for p in stop_words.get("template_phrases_to_avoid", [])
+    ] + [
+        t.lower() for t in stop_words.get("fragment_triggers", [])
+    ]
+    if all_triggers:
+        cleaned = _remove_sentences_with_triggers(cleaned, all_triggers)
+
+    # Remove exact banned_phrases (straight replacement, no sentence removal needed).
+    for phrase in stop_words.get("banned_phrases", []):
+        cleaned = re.sub(re.escape(phrase), "", cleaned, flags=re.IGNORECASE)
+
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     cleaned = re.sub(r"  +", " ", cleaned)
     return cleaned.strip()

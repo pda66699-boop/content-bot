@@ -3,9 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .critic_engine import critic_review
+from .knowledge import load_terminology_registry
 from .polish_engine import polish_text
 from .positioning import resolve_cta_strategy
-from .writer_engine import generate_drafts
+from .writer_engine import (
+    apply_stop_word_guard,
+    generate_drafts,
+    load_stop_words,
+    merge_stop_word_sources,
+)
 
 
 @dataclass
@@ -73,6 +79,8 @@ def score_draft(critic: dict, text: str, cta_need: str) -> int:
 
 def choose_best_variant(drafts_payload: dict, exclude_variants: set[int] | None = None) -> RankedDraft:
     exclude_variants = exclude_variants or set()
+    # Load stop_words once for the final safety pass applied after polish_text.
+    _stop_words = merge_stop_word_sources(load_stop_words(), load_terminology_registry())
     ranked: list[RankedDraft] = []
     for draft in drafts_payload["drafts"]:
         if draft["variant"] in exclude_variants:
@@ -83,6 +91,9 @@ def choose_best_variant(drafts_payload: dict, exclude_variants: set[int] | None 
             selected_angle=drafts_payload.get("selected_angle"),
         )
         polished_text_value = polished_payload["polished_text"]
+        # Final safety pass: polish_text may produce or preserve forbidden phrases,
+        # so we re-run the guard here, after polish, before scoring and display.
+        polished_text_value = apply_stop_word_guard(polished_text_value, _stop_words)
         critic = polished_payload["critic_review"]
         score = score_draft(critic, polished_text_value, draft["cta_need"])
         ranked.append(

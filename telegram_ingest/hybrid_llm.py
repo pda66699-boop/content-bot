@@ -146,30 +146,51 @@ def maybe_generate_writer_drafts(payload: dict, count: int = 2) -> list[dict] | 
     post_type = (payload.get("post_type") or "").strip()
     core_idea = (payload.get("core_idea") or "").strip()
 
-    # When post_type is specified, force the LLM to use the type-specific template
-    # by prepending a hard override as the very first line of the system prompt.
-    # This prevents the LLM from defaulting to the longer СТРУКТУРА ПОСТА section.
-    if post_type:
-        type_override = (
-            f"ОБЯЗАТЕЛЬНО: тип поста — {post_type}. "
-            f"Писать строго по шаблону этого типа из раздела «ШАБЛОН ПО ТИПУ ПОСТА». "
-            f"Общая структура из раздела «СТРУКТУРА ПОСТА» — не применяется."
-        )
-        system_prompt = type_override + "\n\n" + system_prompt
+    VALID_POST_TYPES = {
+        "pain_breakdown", "case", "provocation",
+        "loss_calculator", "authority_breakdown",
+        "personal_insight", "soft_sell",
+    }
+    if post_type and post_type not in VALID_POST_TYPES:
+        LOGGER.warning("maybe_generate_writer_drafts: unknown post_type=%r — clearing", post_type)
+        post_type = ""
 
+    # Build a hard preamble block that appears BEFORE the writer.md system prompt.
+    # This block is the first thing the model reads and cannot be contradicted by
+    # anything that follows.
+    preamble_lines: list[str] = [
+        "╔══════════════════════════════════════════════════════════╗",
+        "║  ЖЁСТКИЕ ОГРАНИЧЕНИЯ — ПРОЧИТАТЬ ПЕРЕД НАПИСАНИЕМ       ║",
+        "╚══════════════════════════════════════════════════════════╝",
+    ]
+    if post_type:
+        preamble_lines += [
+            f"ТИП ПОСТА: {post_type}",
+            f"Писать СТРОГО по шаблону типа «{post_type}» из раздела «ШАБЛОН ПО ТИПУ ПОСТА».",
+            "Раздел «СТРУКТУРА ПОСТА» — НЕ ПРИМЕНЯЕТСЯ. Игнорировать его полностью.",
+            "Отступление от шаблона типа — критическая ошибка.",
+        ]
+    if core_idea:
+        preamble_lines += [
+            f"ГЛАВНАЯ МЫСЛЬ: «{core_idea}»",
+            "Каждый абзац работает только на эту мысль.",
+            "Если абзац не усиливает эту мысль — его нет в посте.",
+        ]
+    preamble_lines.append("══════════════════════════════════════════════════════════")
+    preamble = "\n".join(preamble_lines)
+    system_prompt = preamble + "\n\n" + system_prompt
+
+    char_limit = _char_limit_for_type(post_type)
     post_type_instruction = (
-        f"ТИП ПОСТА: {post_type}. "
-        "Следуй шаблону этого типа из раздела «ШАБЛОН ПО ТИПУ ПОСТА» системного промпта. "
+        f"ТИП ПОСТА: {post_type} — писать строго по шаблону этого типа. "
         if post_type
         else ""
     )
     core_idea_constraint = (
-        f"ГЛАВНАЯ МЫСЛЬ (жёсткое ограничение): «{core_idea}». "
-        "Весь пост работает только на эту мысль. Всё, что на неё не работает — убрать. "
+        f"ГЛАВНАЯ МЫСЛЬ (жёсткое ограничение): «{core_idea}» — весь пост только на неё. "
         if core_idea
         else ""
     )
-    char_limit = _char_limit_for_type(post_type)
 
     user_prompt = json.dumps(
         {

@@ -675,11 +675,12 @@ def infer_post_type(
     cta_need: str,
     source_kind: str,
     marketing_rubric: str,
+    narrative_role: str = "",
 ) -> str:
     """Map internal taxonomy fields to one of 7 human-readable post types."""
     if source_kind in {"verified_case", "case_research"} or strategic_format == "case_breakdown":
         return "case"
-    if content_pillar == "conversational" or strategic_format == "practice_observation":
+    if content_pillar == "conversational" or strategic_format == "practice_observation" or narrative_role == "trust":
         return "personal_insight"
     if cta_need in {"soft", "hard"} and marketing_rubric in {"flagship_warmup", "diagnostic_entry"}:
         return "soft_sell"
@@ -934,6 +935,7 @@ def enrich_candidate_with_balance(candidate: TopicCandidate, feed_state: dict, c
             cta_need=cta_strategy["preferred_cta_need"] if candidate.cta_need != "none" else "none",
             source_kind=candidate.source_kind or "",
             marketing_rubric=rubric,
+            narrative_role=candidate.narrative_role or "",
         ),
         narrative_role=candidate.narrative_role,
         narrative_chain_id=candidate.narrative_chain_id,
