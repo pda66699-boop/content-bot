@@ -1839,7 +1839,14 @@ def pick_default_candidates(feed_state: dict, rows: list[dict], exclude_topics: 
     narrative_state = feed_state.get("narrative_state") or {}
     required_role = str(feed_state.get("roadmap_required_role") or "").lower() or str(narrative_state.get("next_required_role") or "").lower()
 
-    for idx, item in enumerate(roadmap_state.get("next_items", [])[:4]):
+    roadmap_items = roadmap_state.get("next_items", [])[:4]
+    for idx, item in enumerate(roadmap_items):
+        theme = item.get("theme", "")
+        in_recent = theme in recent_topics
+        in_exclude = normalize_topic(theme) in exclude_topics
+        print(f"[ROADMAP DEBUG] idx={idx} theme={theme[:60]!r} in_recent={in_recent} in_exclude={in_exclude}", flush=True)
+
+    for idx, item in enumerate(roadmap_items):
         topic = item.get("theme")
         if not topic or normalize_topic(topic) in exclude_topics or topic in recent_topics:
             continue
