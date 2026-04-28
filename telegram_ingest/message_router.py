@@ -1045,6 +1045,16 @@ def format_five_topics(session: dict, exclude_history: bool = False) -> tuple[st
         if len(topics) >= 5:
             break
 
+    # Debug: show why any roadmap item is excluded from the final five
+    all_best = plan.get("best_next_topics", [])
+    for item in all_best:
+        if item.get("narrative_intent") == "roadmap_progression":
+            is_def = is_default_suggestion(item)
+            already_in = (item.get("theme") or "").strip().lower() in seen_themes
+            print(f"[FORMAT5 DEBUG] roadmap theme={str(item.get('theme') or '')[:60]!r} "
+                  f"novelty={item.get('novelty_status')!r} gate={item.get('editorial_gate')!r} "
+                  f"is_default={is_def} already_in_topics={already_in} score={item.get('score')}", flush=True)
+
     if len(topics) < 5:
         ranked_topics = plan.get("best_next_topics", [])
         for item in [item for item in ranked_topics if is_default_suggestion(item)]:

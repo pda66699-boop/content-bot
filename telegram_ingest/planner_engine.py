@@ -2340,15 +2340,17 @@ def plan_next_topics(
         feed_state["roadmap_required_role"] = roadmap_required_role
 
     best_next_topics = pick_default_candidates(feed_state, rows, exclude_topics=set(exclude_topics or []))
-    best_next_topics = [
-        enrich_candidate_with_balance(
+    enriched: list[TopicCandidate] = []
+    for candidate in best_next_topics:
+        ec = enrich_candidate_with_balance(
             enrich_candidate_with_semantics(candidate, rows, feed_state, campaign_mode, recommended_slot=recommended_slot, open_loops=open_loops),
             feed_state,
             campaign_mode,
         )
-        for candidate in best_next_topics
-    ]
-    best_next_topics = rank_admissible_candidates(best_next_topics)
+        if ec.narrative_intent == "roadmap_progression":
+            print(f"[ROADMAP ENRICH] theme={ec.theme[:60]!r} novelty_status={ec.novelty_status!r} editorial_gate={ec.editorial_gate!r} score={ec.score}", flush=True)
+        enriched.append(ec)
+    best_next_topics = rank_admissible_candidates(enriched)
     user_verdict = {
         "status": "none",
         "original_theme": None,
