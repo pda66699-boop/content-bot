@@ -9,8 +9,15 @@ import urllib.request
 
 
 OPENAI_API_URL = "https://api.openai.com/v1/responses"
-DEFAULT_MODEL = "gpt-5-mini"
-DEFAULT_REASONING_EFFORT = "minimal"
+
+# --- Model routing constants (read from env, with sensible defaults) ----------
+# Writer drafts get a stronger model; everything else uses the cheaper default.
+DEFAULT_MODEL = os.getenv("CONTENT_BOT_LLM_MODEL", "gpt-4o-mini")
+WRITER_MODEL = os.getenv("CONTENT_BOT_WRITER_MODEL", "gpt-4o")
+
+DEFAULT_REASONING_EFFORT = os.getenv("CONTENT_BOT_LLM_REASONING_EFFORT", "low")
+WRITER_REASONING_EFFORT = os.getenv("CONTENT_BOT_WRITER_REASONING_EFFORT", "low")
+
 DEFAULT_MAX_OUTPUT_TOKENS = 4000
 WEB_SEARCH_MAX_OUTPUT_TOKENS = 3200
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 90
@@ -26,7 +33,8 @@ def llm_enabled() -> bool:
     return llm_mode() in {"hybrid", "on", "llm"}
 
 
-def get_model() -> str | None:
+def get_model() -> str:
+    """Return the default (cheap) model, overridable via env."""
     return os.environ.get("CONTENT_BOT_LLM_MODEL", "").strip() or DEFAULT_MODEL
 
 
@@ -35,6 +43,7 @@ def get_api_key() -> str | None:
 
 
 def get_reasoning_effort() -> str:
+    """Return the default reasoning effort for non-writer calls."""
     return os.environ.get("CONTENT_BOT_LLM_REASONING_EFFORT", DEFAULT_REASONING_EFFORT).strip() or DEFAULT_REASONING_EFFORT
 
 
@@ -61,17 +70,31 @@ def resolve_request_timeout_seconds(tools: list[dict] | None = None) -> int:
 
 
 def model_supports_temperature(model: str | None, reasoning_effort: str) -> bool:
+    """True when the model accepts a temperature parameter in the Responses API."""
     if not model:
         return False
     normalized = model.strip().lower()
-    if not normalized.startswith("gpt-5"):
-        return True
-    if normalized.startswith("gpt-5.1") or normalized.startswith("gpt-5.2"):
-        return reasoning_effort == "none"
-    return False
+    # o-series / gpt-5* reasoning models only support temperature when effort=="none"
+    if normalized.startswith("gpt-5") or normalized.startswith("o1") or normalized.startswith("o3"):
+        if normalized.startswith("gpt-5.1") or normalized.startswith("gpt-5.2"):
+            return reasoning_effort == "none"
+        return False
+    # gpt-4o, gpt-4o-mini and all other standard models support temperature freely
+    return True
 
 
-def resolve_reasoning_effort(tools: list[dict] | None = None) -> str:
+def resolve_reasoning_effort(
+    tools: list[dict] | None = None,
+    effort_override: str | None = None,
+) -> str:
+    """Return the reasoning effort to use for a call.
+
+    effort_override — if set, takes precedence over the env default.
+    For web_search calls, 'minimal' is bumped to 'low' automatically
+    (only when no override is in effect).
+    """
+    if effort_override:
+        return effort_override
     effort = get_reasoning_effort()
     if tools and any(tool.get("type") == "web_search" for tool in tools):
         if effort == "minimal":
@@ -121,11 +144,28 @@ def extract_json_blob(text: str) -> dict | None:
     return None
 
 
-def complete_json(system_prompt: str, user_prompt: str, temperature: float = 0.7) -> dict | None:
-    return _complete_json_request(system_prompt, user_prompt, temperature=temperature, tools=None)
+def complete_json(
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float = 0.7,
+    model_override: str | None = None,
+    reasoning_effort_override: str | None = None,
+) -> dict | None:
+    return _complete_json_request(
+        system_prompt,
+        user_prompt,
+        temperature=temperature,
+        tools=None,
+        model_override=model_override,
+        reasoning_effort_override=reasoning_effort_override,
+    )
 
 
-def complete_json_with_web_search(system_prompt: str, user_prompt: str, temperature: float = 0.3) -> dict | None:
+def complete_json_with_web_search(
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float = 0.3,
+) -> dict | None:
     return _complete_json_request(
         system_prompt,
         user_prompt,
@@ -139,22 +179,26 @@ def _complete_json_request(
     user_prompt: str,
     temperature: float = 0.7,
     tools: list[dict] | None = None,
+    model_override: str | None = None,
+    reasoning_effort_override: str | None = None,
 ) -> dict | None:
     if not llm_available():
         LOGGER.info("LLM fallback: unavailable (mode=%s, model=%s, has_key=%s)", llm_mode(), get_model(), bool(get_api_key()))
         return None
 
+    model = model_override or get_model()
+    effort = resolve_reasoning_effort(tools, effort_override=reasoning_effort_override)
     request_kind = "web_search" if tools else "json"
     started_at = time.monotonic()
-    LOGGER.debug("LLM request started kind=%s model=%s reasoning=%s", request_kind, get_model(), resolve_reasoning_effort(tools))
+    LOGGER.debug("LLM request started kind=%s model=%s reasoning=%s", request_kind, model, effort)
 
     payload = {
-        "model": get_model(),
+        "model": model,
         "instructions": system_prompt,
         "max_output_tokens": resolve_max_output_tokens(tools),
         "store": False,
         "reasoning": {
-            "effort": resolve_reasoning_effort(tools),
+            "effort": effort,
         },
         "text": {
             "format": {
@@ -181,11 +225,11 @@ def _complete_json_request(
             }
         ],
     }
-    if model_supports_temperature(get_model(), resolve_reasoning_effort(tools)):
+    if model_supports_temperature(model, effort):
         payload["temperature"] = temperature
     if tools:
         payload["tools"] = tools
-    print(f"[LLM] model={get_model()}, kind={request_kind}, prompt_chars={len(system_prompt)}, payload_keys={list(payload.keys())}", flush=True)
+    print(f"[LLM] model={model}, kind={request_kind}, effort={effort}, prompt_chars={len(system_prompt)}, payload_keys={list(payload.keys())}", flush=True)
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         OPENAI_API_URL,
@@ -205,13 +249,13 @@ def _complete_json_request(
             detail = exc.read().decode("utf-8", errors="replace")
         except (OSError, UnicodeDecodeError):
             detail = ""
-        LOGGER.warning("LLM fallback: HTTPError %s %s — kind=%s elapsed=%.2fs", exc.code, detail[:1000], request_kind, time.monotonic() - started_at)
+        LOGGER.warning("LLM fallback: HTTPError %s %s — kind=%s model=%s elapsed=%.2fs", exc.code, detail[:1000], request_kind, model, time.monotonic() - started_at)
         return None
     except urllib.error.URLError as exc:
-        LOGGER.warning("LLM fallback: URLError %s — kind=%s elapsed=%.2fs", exc.reason, request_kind, time.monotonic() - started_at)
+        LOGGER.warning("LLM fallback: URLError %s — kind=%s model=%s elapsed=%.2fs", exc.reason, request_kind, model, time.monotonic() - started_at)
         return None
     except TimeoutError:
-        LOGGER.warning("LLM fallback: request timed out — kind=%s elapsed=%.2fs", request_kind, time.monotonic() - started_at)
+        LOGGER.warning("LLM fallback: request timed out — kind=%s model=%s elapsed=%.2fs", request_kind, model, time.monotonic() - started_at)
         return None
 
     try:
@@ -228,12 +272,12 @@ def _complete_json_request(
     result = extract_json_blob(content)
     if parsed.get("status") == "incomplete":
         if result is not None:
-            LOGGER.warning("LLM response incomplete, but partial JSON was recovered — kind=%s elapsed=%.2fs", request_kind, time.monotonic() - started_at)
+            LOGGER.warning("LLM response incomplete, but partial JSON was recovered — kind=%s model=%s elapsed=%.2fs", request_kind, model, time.monotonic() - started_at)
             return result
         LOGGER.warning("LLM fallback: response status incomplete")
         return None
     if result is None:
-        LOGGER.warning("LLM fallback: could not extract JSON blob — kind=%s elapsed=%.2fs", request_kind, time.monotonic() - started_at)
+        LOGGER.warning("LLM fallback: could not extract JSON blob — kind=%s model=%s elapsed=%.2fs", request_kind, model, time.monotonic() - started_at)
         return None
-    LOGGER.debug("LLM request finished ok — kind=%s elapsed=%.2fs", request_kind, time.monotonic() - started_at)
+    LOGGER.debug("LLM request finished ok — kind=%s model=%s elapsed=%.2fs", request_kind, model, time.monotonic() - started_at)
     return result

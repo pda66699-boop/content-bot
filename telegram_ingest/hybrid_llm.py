@@ -4,7 +4,13 @@ import json
 import logging
 
 from .config import PROMPTS_DIR
-from .llm_client import complete_json, complete_json_with_web_search, llm_available
+from .llm_client import (
+    WRITER_MODEL,
+    WRITER_REASONING_EFFORT,
+    complete_json,
+    complete_json_with_web_search,
+    llm_available,
+)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -234,7 +240,13 @@ def maybe_generate_writer_drafts(payload: dict, count: int = 2) -> list[dict] | 
         },
         ensure_ascii=False,
     )
-    response = complete_json(system_prompt, user_prompt, temperature=0.95)
+    response = complete_json(
+        system_prompt,
+        user_prompt,
+        temperature=0.95,
+        model_override=WRITER_MODEL,
+        reasoning_effort_override=WRITER_REASONING_EFFORT,
+    )
     if not response:
         LOGGER.warning("writer_drafts: LLM returned None")
         return None
