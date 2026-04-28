@@ -14,7 +14,7 @@ if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 
 from telegram_ingest.editorial_evaluation import build_planner_batch_review  # noqa: E402
-from telegram_ingest.planner_engine import plan_next_topics  # noqa: E402
+from telegram_ingest.planner_engine import build_roadmap_state, plan_next_topics  # noqa: E402
 
 from planner_regression_fixtures import archive_row, patched_planner_runtime  # noqa: E402
 
@@ -69,6 +69,57 @@ class PlannerRegressionTests(unittest.TestCase):
         self.assertEqual(candidate["novelty_status"], "reframe_allowed")
         self.assertEqual(candidate["editorial_admissibility"], "reframe_only")
         self.assertTrue(candidate["why_not_fresh"])
+
+    def test_planner_treats_teryaet_dengi_as_hidden_losses_repeat(self) -> None:
+        """Roadmap wording with 'теряет деньги' should match older hidden-losses posts."""
+
+        archive = [
+            archive_row(
+                days_ago=10,
+                primary_theme="оптимизация издержек через процессы",
+                primary_thesis="Основные издержки часто скрыты не в бюджете, а в ручном труде, сбоях процессов и управленческих разрывах.",
+                angle="показать, почему оптимизация издержек начинается с поиска скрытых операционных потерь",
+                business_dimensions=["операционка", "финансы"],
+                body_text="Самые дорогие потери редко лежат в строке расходов: они прячутся во времени, ошибках, разрывах процессов и ручном контроле.",
+            )
+        ]
+        roadmap = [
+            {
+                "id": "w1_p2",
+                "week": 1,
+                "order": 2,
+                "narrative_position_index": 2,
+                "theme": "где на самом деле бизнес теряет деньги, даже если p and l этого не показывает",
+                "angle": "разобрать скрытые потери в переделках, разрывах между функциями, ручном контроле и ошибках исполнения",
+                "narrative_role": "pain",
+                "narrative_chain_id": "week-1",
+            }
+        ]
+
+        state = build_roadmap_state(archive, roadmap)
+
+        self.assertTrue(state["items"][0]["completed"])
+        self.assertIn("оптимизация издержек", state["items"][0]["matched_post_title_or_date"])
+
+    def test_completed_hidden_losses_roadmap_topic_is_not_recommended_again(self) -> None:
+        """A completed hidden-losses roadmap item should not be offered as a fresh next topic."""
+
+        archive = [
+            archive_row(
+                days_ago=10,
+                primary_theme="оптимизация издержек через процессы",
+                primary_thesis="Основные издержки часто скрыты не в бюджете, а в ручном труде, сбоях процессов и управленческих разрывах.",
+                angle="показать, почему оптимизация издержек начинается с поиска скрытых операционных потерь",
+                business_dimensions=["операционка", "финансы"],
+                body_text="Самые дорогие потери редко лежат в строке расходов: они прячутся во времени, ошибках, разрывах процессов и ручном контроле.",
+            )
+        ]
+
+        with patched_planner_runtime(archive):
+            plan = plan_next_topics()
+
+        themes = [item["theme"] for item in plan["best_next_topics"]]
+        self.assertNotIn("где на самом деле бизнес теряет деньги, даже если p and l этого не показывает", themes)
 
     def test_reframe_allowed_never_masquerades_as_fresh_in_user_output(self) -> None:
         """User-facing planner output should keep reframe candidates explicitly non-fresh."""

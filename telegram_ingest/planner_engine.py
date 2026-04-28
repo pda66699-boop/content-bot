@@ -453,6 +453,9 @@ def roadmap_match_score(roadmap_theme: str, row: dict, roadmap_item: dict | None
         owner_dependency_bonus = 0.55
 
     score = max(theme_score, angle_score, min(1.0, max(theme_score, angle_score) + owner_dependency_bonus))
+    hidden_loss_markers = ("потер", "теря", "утеч", "издерж", "расход", "деньг", "прибыл", "p and l")
+    if _marker_hits(roadmap_text, hidden_loss_markers) >= 2 and _marker_hits(row_text, hidden_loss_markers) >= 1:
+        score = max(score, 0.62)
     if not row.get("primary_theme") and not row.get("primary_thesis") and not row.get("angle"):
         score -= 0.05
     score += _roadmap_recency_bonus(row)

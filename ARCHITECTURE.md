@@ -39,7 +39,7 @@ content-bot/
 | `polling_runner.py` | Цикл polling, обработка очереди |
 | `message_router.py` | **Главный роутер** — разбирает сообщения, вызывает нужную логику, управляет сессией |
 | `bot_api.py` | Обёртка над Telegram Bot API |
-| `bot_state.py` | Состояние сессий пользователей |
+| `bot_state.py` | Состояние сессий пользователей; startup-очистка stale drafts |
 
 ### Генерация постов (основной pipeline)
 ```
@@ -73,6 +73,31 @@ message_router → command_interface → publishable_engine
 | `rewrite_engine.py` | Рерайт существующего поста по плану улучшений |
 
 ### Планировщик тем
+
+#### Выдача пяти тем в Telegram
+
+```
+message_router.format_five_topics
+        ↓
+planner_engine.plan_next_topics
+        ↓
+feed_coverage + roadmap_state + backlog + open_loops
+        ↓
+semantic novelty check + editorial_gate
+        ↓
+weekly_plan / best_next_topics
+        ↓
+filter: сначала только fresh + allowed
+        ↓
+fallback: reframe_only только если fresh-вариантов меньше пяти
+        ↓
+session["last_topic_suggestions"]
+        ↓
+handle_topic_pick("1".."5") → build_post_command_result
+```
+
+Критичное правило: цифра пользователя выбирает тему из последней сохранённой пятёрки. Если бот "берёт не ту тему", почти всегда проблема в ранжировании/фильтрации выдачи, а не в обработчике номера.
+
 | Файл | Роль |
 |---|---|
 | `planner_engine.py` | **Главный планировщик** — скоринг кандидатов, roadmap, воронка, `infer_post_type` |
@@ -141,6 +166,18 @@ message_router → command_interface → publishable_engine
 | `telegram_ingest.sqlite3` | SQLite — posts_index, сессии |
 | `telegram_ui_state.json` | Состояние UI (клавиатуры, последние данные) |
 
+### Runtime-состояние и stale drafts
+
+При старте polling `polling_runner.run_polling()` вызывает `bot_state.startup_clear_stale_drafts()`.
+
+Очищаются поля сессий:
+
+- `last_generated`
+- `last_analyzed_post`
+- `last_improvement_options`
+
+Зачем: если между перезапусками изменились `writer.md`, `stop_words.json` или guard-логика, старый draft не должен возвращаться пользователю через "улучшить", "анализ" или revision-flow без повторного прохождения актуальных гардов.
+
 ---
 
 ## Типы постов (`post_type`)
@@ -175,6 +212,54 @@ message_router → command_interface → publishable_engine
 | `reframe` | Переосмысление привычного |
 | `proof` | Доказательство, кейс, исследование |
 | `solution` | Практический путь решения |
+
+---
+
+## Semantic novelty и roadmap
+
+### Источник истины по повторам
+
+Повторы определяются не только по названию темы. Основная проверка живёт в:
+
+- `editorial_extractor.py` — строит semantic metadata;
+- `editorial_similarity.py` — считает semantic neighbors и `novelty_status`;
+- `planner_engine.py` — превращает novelty в `editorial_gate`, penalty и порядок выдачи.
+
+Ключевые поля:
+
+- `primary_thesis`
+- `secondary_theses`
+- `angle`
+- `business_dimensions`
+- `funnel_stage`
+- `format_type`
+- `novelty_window_days`
+
+### Статусы
+
+| Статус | Значение | Поведение в обычной пятёрке |
+|---|---|---|
+| `fresh` | Тезис и угол достаточно новые | Можно показывать как обычную тему |
+| `reframe_allowed` | Тезис уже звучал, нужен другой угол/формат | Не показывать как fresh; только reframe/fallback |
+| `series_continuation` | Продолжение начатой линии | Нужна continuity-evidence/open_loop |
+| `too_close` | Слишком близко к уже опубликованному | Исключить из рекомендаций |
+
+### Roadmap
+
+`content_plan_roadmap.json` задаёт редакционную последовательность, но пункт roadmap считается `completed`, если похожий смысл уже закрыт опубликованным постом.
+
+`planner_engine.roadmap_match_score()` дополнительно учитывает смысловые маркеры скрытых потерь:
+
+- `потер`
+- `теря`
+- `утеч`
+- `издерж`
+- `расход`
+- `деньг`
+- `прибыл`
+- `p and l`
+
+Это защищает от ситуации, когда тема "где бизнес теряет деньги" повторно предлагается после уже опубликованного поста про оптимизацию издержек и скрытые потери.
 
 ---
 
@@ -229,6 +314,8 @@ message_router → command_interface → publishable_engine
 | 2026-04-28 | `apply_stop_word_guard` резал фразу в середине предложения → оставлял мусор | `writer_engine.py` | Переписан: удаляет целое предложение через `_remove_sentences_with_triggers()` |
 | 2026-04-28 | Гард не вызывался после `polish_text` → forbidden phrases проходили в финал | `publishable_engine.py` | Добавлен второй вызов `apply_stop_word_guard` после `polish_text` |
 | 2026-04-28 | `post_type` и `core_idea` были мягкими подсказками в промпте — LLM игнорировал | `hybrid_llm.py` | Заменены жёстким преамбулом, вставляемым ДО `writer.md` |
+| 2026-04-28 | После изменения prompt/stop_words старые drafts могли всплывать из сессии без актуальных гардов | `bot_state.py`, `polling_runner.py` | На старте polling очищаются stale draft-поля: `last_generated`, `last_analyzed_post`, `last_improvement_options` |
+| 2026-04-28 | Бот снова предлагал тему про "самые дорогие потери / где бизнес теряет деньги", хотя близкий пост уже был в канале | `editorial_extractor.py`, `planner_engine.py`, `message_router.py` | Добавлены маркеры `теря/утеч`, roadmap-матчинг скрытых потерь и фильтр обычной пятёрки по `fresh + allowed` |
 
 ---
 
