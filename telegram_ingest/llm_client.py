@@ -185,6 +185,7 @@ def _complete_json_request(
         payload["temperature"] = temperature
     if tools:
         payload["tools"] = tools
+    print(f"[LLM] model={get_model()}, kind={request_kind}, prompt_chars={len(system_prompt)}, payload_keys={list(payload.keys())}", flush=True)
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         OPENAI_API_URL,
