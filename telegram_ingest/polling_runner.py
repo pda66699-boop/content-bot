@@ -4,6 +4,7 @@ import logging
 import time
 
 from .bot_api import TelegramBotApiError, delete_webhook, get_updates
+from .bot_state import startup_clear_stale_drafts
 from .message_router import route_message_update
 from .pipeline import process_update
 from .runtime import load_offset, save_offset
@@ -14,6 +15,11 @@ DEFAULT_ALLOWED_UPDATES = ["channel_post", "edited_channel_post", "message", "ca
 
 
 def run_polling(timeout: int = 30, idle_sleep: float = 1.0, reset_webhook: bool = True) -> None:
+    # Clear draft fields from all sessions so that any text generated under a
+    # previous version of writer.md / stop_words.json cannot be served without
+    # re-running the guard.
+    startup_clear_stale_drafts()
+
     if reset_webhook:
         delete_webhook(drop_pending_updates=False)
 

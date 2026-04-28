@@ -1032,7 +1032,11 @@ def format_five_topics(session: dict, exclude_history: bool = False) -> tuple[st
     topics: list[dict] = []
     seen_themes: set[str] = set()
 
-    for item in plan.get("weekly_plan", []) or []:
+    def is_default_suggestion(item: dict) -> bool:
+        return item.get("editorial_gate") in {None, "", "allowed"} and item.get("novelty_status") == "fresh"
+
+    weekly_items = plan.get("weekly_plan", []) or []
+    for item in [item for item in weekly_items if is_default_suggestion(item)]:
         theme = (item.get("theme") or "").strip().lower()
         if not theme or theme in seen_themes:
             continue
@@ -1042,8 +1046,18 @@ def format_five_topics(session: dict, exclude_history: bool = False) -> tuple[st
             break
 
     if len(topics) < 5:
-        ranked_topics = sorted(plan.get("best_next_topics", []), key=lambda item: item.get("score", 0), reverse=True)
-        for item in ranked_topics:
+        ranked_topics = plan.get("best_next_topics", [])
+        for item in [item for item in ranked_topics if is_default_suggestion(item)]:
+            theme = (item.get("theme") or "").strip().lower()
+            if not theme or theme in seen_themes:
+                continue
+            topics.append(item)
+            seen_themes.add(theme)
+            if len(topics) >= 5:
+                break
+    if len(topics) < 5:
+        fallback_topics = sorted(plan.get("best_next_topics", []), key=lambda item: item.get("score", 0), reverse=True)
+        for item in fallback_topics:
             theme = (item.get("theme") or "").strip().lower()
             if not theme or theme in seen_themes:
                 continue
@@ -1411,6 +1425,7 @@ def handle_waiting_mode(chat_id: int | str, user_id: int | None, text: str, sess
 
     if mode == "await_post_theme":
         goal = session.get("post_goal") or "expert"
+        print(f"[DRAFT] source=generated, theme={text[:60]}", flush=True)
         result = build_post_command_result(theme=text, goal=goal)
         session["mode"] = None
         session.setdefault("generated_themes_history", [])
@@ -1439,6 +1454,7 @@ def handle_waiting_mode(chat_id: int | str, user_id: int | None, text: str, sess
         preferred_cta_mode = last_generated.get("preferred_cta_mode")
         case_context = last_generated.get("case_context")
         topic_brief = last_generated.get("topic_brief")
+        print(f"[DRAFT] source=session_state, theme={str(theme or '')[:60]}, text_len={len(source_text or '')}", flush=True)
         if not source_text:
             session["mode"] = None
             save_session(chat_id, user_id, session)
@@ -1534,6 +1550,7 @@ def handle_topic_pick(chat_id: int | str, user_id: int | None, text: str, sessio
     theme = selected.get("theme")
     goal = selected.get("content_pillar") or "expert"
     preferred_cta_mode = selected.get("preferred_cta_mode")
+    print(f"[DRAFT] source=generated, theme={str(theme or '')[:60]}", flush=True)
     result = build_post_command_result(
         theme=theme,
         goal=goal,
@@ -2072,6 +2089,7 @@ def route_callback_query(update: dict) -> bool:
             send_chunks(chat_id, "Не вижу последней темы в рабочей памяти. Лучше заново запустить генерацию.", reply_markup=build_main_menu_keyboard())
             return True
         tried = {item for item in last_generated.get("variants_tried", []) if isinstance(item, int)}
+        print(f"[DRAFT] source=generated, theme={str(theme or '')[:60]}, exclude_variants={sorted(tried)}", flush=True)
         try:
             result = build_post_command_result(
                 theme=theme,
@@ -2134,6 +2152,7 @@ def route_callback_query(update: dict) -> bool:
         source = session.get("last_generated") or session.get("last_analyzed_post") or {}
         final_text = source.get("text") or source.get("final_text")
         theme = source.get("theme")
+        print(f"[DRAFT] source=session_state, action=improve, theme={str(theme or '')[:60]}, text_len={len(final_text or '')}", flush=True)
         if not final_text:
             answer_callback_query(callback_query["id"], "Нет текста")
             send_chunks(chat_id, "Сначала нужно проанализировать или сгенерировать пост, чтобы я предложил улучшения.", reply_markup=build_main_menu_keyboard())
@@ -2148,6 +2167,7 @@ def route_callback_query(update: dict) -> bool:
         source = session.get("last_generated") or session.get("last_analyzed_post") or {}
         source_text = source.get("text") or source.get("final_text")
         theme = source.get("theme")
+        print(f"[DRAFT] source=session_state, action=rewrite, theme={str(theme or '')[:60]}, text_len={len(source_text or '')}", flush=True)
         goal = source.get("goal") or session.get("post_goal") or "expert"
         preferred_cta_mode = source.get("preferred_cta_mode")
         case_context = source.get("case_context")
