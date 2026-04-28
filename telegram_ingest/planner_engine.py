@@ -1258,7 +1258,7 @@ def enrich_candidate_with_semantics(
         narrative_role=inferred_narrative_role,
         narrative_chain_id=str(narrative_state.get("current_chain_id") or ""),
         narrative_position_index=_narrative_position_index(narrative_state),
-        narrative_intent=str(narrative_fit.get("narrative_intent") or ""),
+        narrative_intent=str(narrative_fit.get("narrative_intent") or candidate.narrative_intent or ""),
         narrative_gate=str(narrative_fit.get("narrative_gate") or "allowed"),
         narrative_reason=str(narrative_fit.get("narrative_reason") or ""),
     )

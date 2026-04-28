@@ -69,6 +69,18 @@ def resolve_request_timeout_seconds(tools: list[dict] | None = None) -> int:
     return DEFAULT_REQUEST_TIMEOUT_SECONDS
 
 
+def model_supports_reasoning_effort(model: str | None) -> bool:
+    """True only for reasoning / o-series models that accept reasoning.effort."""
+    if not model:
+        return False
+    normalized = model.strip().lower()
+    return (
+        normalized.startswith("o1")
+        or normalized.startswith("o3")
+        or normalized.startswith("gpt-5")
+    )
+
+
 def model_supports_temperature(model: str | None, reasoning_effort: str) -> bool:
     """True when the model accepts a temperature parameter in the Responses API."""
     if not model:
@@ -192,14 +204,11 @@ def _complete_json_request(
     started_at = time.monotonic()
     LOGGER.debug("LLM request started kind=%s model=%s reasoning=%s", request_kind, model, effort)
 
-    payload = {
+    payload: dict = {
         "model": model,
         "instructions": system_prompt,
         "max_output_tokens": resolve_max_output_tokens(tools),
         "store": False,
-        "reasoning": {
-            "effort": effort,
-        },
         "text": {
             "format": {
                 "type": "json_schema",
@@ -225,6 +234,10 @@ def _complete_json_request(
             }
         ],
     }
+    # reasoning.effort is only valid for o1/o3/gpt-5* models; standard GPT models
+    # (gpt-4o, gpt-4o-mini, etc.) reject the parameter with HTTP 400.
+    if model_supports_reasoning_effort(model):
+        payload["reasoning"] = {"effort": effort}
     if model_supports_temperature(model, effort):
         payload["temperature"] = temperature
     if tools:
