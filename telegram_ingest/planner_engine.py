@@ -680,7 +680,13 @@ def infer_post_type(
     """Map internal taxonomy fields to one of 7 human-readable post types."""
     if source_kind in {"verified_case", "case_research"} or strategic_format == "case_breakdown":
         return "case"
-    if content_pillar == "conversational" or strategic_format == "practice_observation" or narrative_role == "trust":
+    if (
+        content_pillar == "conversational"
+        or strategic_format == "practice_observation"
+        or marketing_rubric == "reflective_observation"
+        or (narrative_role == "trust" and marketing_rubric == "flagship_warmup")
+        or narrative_role == "trust"
+    ):
         return "personal_insight"
     if cta_need in {"soft", "hard"} and marketing_rubric in {"flagship_warmup", "diagnostic_entry"}:
         return "soft_sell"

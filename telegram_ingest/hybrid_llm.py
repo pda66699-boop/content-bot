@@ -146,6 +146,9 @@ def maybe_generate_writer_drafts(payload: dict, count: int = 2) -> list[dict] | 
     post_type = (payload.get("post_type") or "").strip()
     core_idea = (payload.get("core_idea") or "").strip()
 
+    LOGGER.debug("[DEBUG] post_type received: %r", post_type or "(empty)")
+    LOGGER.debug("[DEBUG] core_idea received: %r", core_idea or "(empty)")
+
     VALID_POST_TYPES = {
         "pain_breakdown", "case", "provocation",
         "loss_calculator", "authority_breakdown",
