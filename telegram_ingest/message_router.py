@@ -1035,6 +1035,33 @@ def format_five_topics(session: dict, exclude_history: bool = False) -> tuple[st
     def is_default_suggestion(item: dict) -> bool:
         return item.get("editorial_gate") in {None, "", "allowed"} and item.get("novelty_status") == "fresh"
 
+    def is_roadmap_item(item: dict) -> bool:
+        """Roadmap items are explicitly scheduled and bypass novelty requirements."""
+        return (
+            item.get("narrative_intent") == "roadmap_progression"
+            and item.get("editorial_gate") != "disallowed"
+            and item.get("narrative_gate") != "forbidden"
+        )
+
+    all_best = plan.get("best_next_topics", [])
+
+    # Pass 0: roadmap items always go first — they are explicitly scheduled,
+    # so novelty_status is irrelevant. Only hard editorial_gate=disallowed blocks them.
+    for item in sorted(all_best, key=lambda x: int(x.get("score") or 0), reverse=True):
+        if not is_roadmap_item(item):
+            continue
+        theme = (item.get("theme") or "").strip().lower()
+        if not theme or theme in seen_themes:
+            continue
+        print(f"[ROADMAP PICK] theme={str(item.get('theme') or '')[:60]!r} "
+              f"novelty={item.get('novelty_status')!r} gate={item.get('editorial_gate')!r} "
+              f"score={item.get('score')}", flush=True)
+        topics.append(item)
+        seen_themes.add(theme)
+        if len(topics) >= 5:
+            break
+
+    # Pass 1: weekly plan fresh/allowed items
     weekly_items = plan.get("weekly_plan", []) or []
     for item in [item for item in weekly_items if is_default_suggestion(item)]:
         theme = (item.get("theme") or "").strip().lower()
@@ -1045,16 +1072,7 @@ def format_five_topics(session: dict, exclude_history: bool = False) -> tuple[st
         if len(topics) >= 5:
             break
 
-    # Debug: show why any roadmap item is excluded from the final five
-    all_best = plan.get("best_next_topics", [])
-    for item in all_best:
-        if item.get("narrative_intent") == "roadmap_progression":
-            is_def = is_default_suggestion(item)
-            already_in = (item.get("theme") or "").strip().lower() in seen_themes
-            print(f"[FORMAT5 DEBUG] roadmap theme={str(item.get('theme') or '')[:60]!r} "
-                  f"novelty={item.get('novelty_status')!r} gate={item.get('editorial_gate')!r} "
-                  f"is_default={is_def} already_in_topics={already_in} score={item.get('score')}", flush=True)
-
+    # Pass 2: best_next_topics fresh/allowed items
     if len(topics) < 5:
         ranked_topics = plan.get("best_next_topics", [])
         for item in [item for item in ranked_topics if is_default_suggestion(item)]:
@@ -1065,6 +1083,8 @@ def format_five_topics(session: dict, exclude_history: bool = False) -> tuple[st
             seen_themes.add(theme)
             if len(topics) >= 5:
                 break
+
+    # Pass 3: any remaining fallback regardless of novelty
     if len(topics) < 5:
         fallback_topics = sorted(plan.get("best_next_topics", []), key=lambda item: item.get("score", 0), reverse=True)
         for item in fallback_topics:
