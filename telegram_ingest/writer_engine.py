@@ -1151,6 +1151,20 @@ def apply_stop_word_guard(text: str, stop_words: dict) -> str:
     return cleaned.strip()
 
 
+def has_generation_artifacts(text: str) -> bool:
+    """Detect broken generation artifacts that indicate LLM output corruption."""
+    patterns = [
+        r"—\s*,",                  # "не , а" — пустое место после тире
+        r"\bфото\b(?!\s+\w{4,})",  # "системную фото" без продолжения
+        r"\s{3,}",                  # тройные пробелы
+        r"[а-яa-z]—[а-яa-z]",     # слово-тире-слово без пробелов
+    ]
+    for pattern in patterns:
+        if re.search(pattern, text, re.IGNORECASE):
+            return True
+    return False
+
+
 def assemble_parts(parts_map: dict[str, str], variant: int) -> list[str]:
     blueprint = STRUCTURE_BLUEPRINTS[variant % len(STRUCTURE_BLUEPRINTS)]
     return [parts_map[key] for key in blueprint if parts_map.get(key)]
@@ -1269,38 +1283,42 @@ def generate_drafts(
     post_type = (topic_brief or {}).get("post_type") or ""
     LOGGER.info("generate_drafts: post_type=%s theme=%r", post_type or "(none)", context.theme)
 
-    llm_drafts = maybe_generate_writer_drafts(
-        {
-            "selected_topic": context.theme,
-            "angle": context.angle,
-            "goal": business_goal,
-            "campaign_mode": context.positioning_flags.get("campaign_mode"),
-            "flagship_offer": context.positioning_flags.get("flagship_offer"),
-            "content_role": context.content_role,
-            "content_pillar": context.content_pillar,
-            "cta_policy": context.cta_need,
-            "style_references": [
-                {
-                    "date": row.get("date"),
-                    "primary_theme": row.get("primary_theme"),
-                    "title_hook": row.get("title_hook"),
-                    "body_text": row.get("body_text"),
-                }
-                for row in context.style_references
-            ],
-            "knowledge_core_notes": context.terminology_registry,
-            "avoid_phrases": context.stop_words,
-            "voice_profile": context.style_profile,
-            "post_type": post_type,
-            "core_idea": core_idea or "",
-            "editorial_feedback": context.editorial_feedback,
-            "case_context": context.case_context,
-            "topic_brief": topic_brief,
-        },
-        count=min(count, 2),
-    )
+    _MAX_ARTIFACT_RETRIES = 2
+    _writer_payload = {
+        "selected_topic": context.theme,
+        "angle": context.angle,
+        "goal": business_goal,
+        "campaign_mode": context.positioning_flags.get("campaign_mode"),
+        "flagship_offer": context.positioning_flags.get("flagship_offer"),
+        "content_role": context.content_role,
+        "content_pillar": context.content_pillar,
+        "cta_policy": context.cta_need,
+        "style_references": [
+            {
+                "date": row.get("date"),
+                "primary_theme": row.get("primary_theme"),
+                "title_hook": row.get("title_hook"),
+                "body_text": row.get("body_text"),
+            }
+            for row in context.style_references
+        ],
+        "knowledge_core_notes": context.terminology_registry,
+        "avoid_phrases": context.stop_words,
+        "voice_profile": context.style_profile,
+        "post_type": post_type,
+        "core_idea": core_idea or "",
+        "editorial_feedback": context.editorial_feedback,
+        "case_context": context.case_context,
+        "topic_brief": topic_brief,
+    }
 
-    if llm_drafts:
+    llm_drafts = None
+    for _attempt in range(_MAX_ARTIFACT_RETRIES + 1):
+        llm_drafts = maybe_generate_writer_drafts(_writer_payload, count=min(count, 2))
+        if not llm_drafts:
+            break
+        _attempt_drafts: list[dict] = []
+        _artifact_hits = 0
         for idx, item in enumerate(llm_drafts, start=1):
             llm_text = item["text"]
             llm_text = add_emojis_if_needed(llm_text, context.theme, context.user_preferences, context.business_goal)
@@ -1308,7 +1326,14 @@ def generate_drafts(
             llm_text = apply_voice_authenticity_guard(llm_text, context.case_context)
             llm_text = apply_editorial_feedback_guards(llm_text, context.editorial_feedback)
             llm_text = strip_emojis_if_needed(llm_text, context.user_preferences)
-            drafts.append(
+            if has_generation_artifacts(llm_text):
+                LOGGER.warning(
+                    "[ARTIFACT] draft %d/%d attempt %d/%d — skipping corrupted output",
+                    idx, len(llm_drafts), _attempt + 1, _MAX_ARTIFACT_RETRIES + 1,
+                )
+                _artifact_hits += 1
+                continue
+            _attempt_drafts.append(
                 {
                     "variant": idx,
                     "theme": context.theme,
@@ -1329,6 +1354,14 @@ def generate_drafts(
                     ),
                     "text": llm_text,
                 }
+            )
+        if _attempt_drafts:
+            drafts.extend(_attempt_drafts)
+            break
+        if _attempt < _MAX_ARTIFACT_RETRIES:
+            LOGGER.warning(
+                "[ARTIFACT] all %d LLM draft(s) had artifacts — retrying (%d/%d)",
+                len(llm_drafts), _attempt + 1, _MAX_ARTIFACT_RETRIES,
             )
 
     # Rule-based drafts are fallback only — skip when LLM produced results
