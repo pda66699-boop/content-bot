@@ -94,7 +94,7 @@ def compute_flagship_fit(theme: str, angle: str = "", content_pillar: str | None
 
     if any(token in combined for token in ("регламент", "роль", "оргструкт", "процесс", "операцион")):
         score += 4
-        reasons.append("тема показывает опорные узлы, которые логично связываются с 45-дневной сборкой")
+        reasons.append("тема показывает опорные узлы, которые логично связываются с 60-дневным спринтом")
 
     if any(token in combined for token in SEGMENT_TOKENS):
         score += 4
@@ -119,26 +119,26 @@ def resolve_cta_strategy(theme: str, content_pillar: str | None = None, campaign
     stage = "trust"
     allowed_ctas = ["comment", "none", "diagnostic"]
     preferred = "optional"
-    path = "контент -> доверие -> диагностика -> 45 дней"
+    path = "контент -> доверие -> диагностика -> 60 дней"
     reason = "тема работает скорее на доверие и постепенный прогрев, чем на прямой оффер"
 
     if any(token in normalized for token in DIAGNOSTIC_TOKENS):
         stage = "problem_aware"
         allowed_ctas = ["diagnostic", "comment", "personal"]
         preferred = "soft"
-        path = "симптом -> диагностика -> разбор перекоса -> 45 дней"
+        path = "симптом -> диагностика -> разбор перекоса -> 60 дней"
         reason = "тема естественно ведёт в диагностику как мягкий вход в воронку"
     elif pillar == "money" or any(token in normalized for token in MONEY_TOKENS):
         stage = "solution_aware"
         allowed_ctas = ["diagnostic", "comment", "personal", "flagship"]
         preferred = "soft"
-        path = "деньги и потери -> диагностика/разбор -> 45 дней"
+        path = "деньги и потери -> диагностика/разбор -> 60 дней"
         reason = "денежная тема может вести ближе к офферу, если дать логичный следующий шаг"
     elif pillar == "expert":
         stage = "solution_consideration"
         allowed_ctas = ["comment", "none", "diagnostic", "personal"]
         preferred = "optional"
-        path = "экспертность -> доверие -> диагностика -> 45 дней"
+        path = "экспертность -> доверие -> диагностика -> 60 дней"
         reason = "экспертная тема лучше работает как мост к следующему шагу, а не как прямой дожим"
 
     flagship_fit = compute_flagship_fit(theme, content_pillar=content_pillar)
@@ -154,7 +154,7 @@ def resolve_cta_strategy(theme: str, content_pillar: str | None = None, campaign
         preferred = "hard"
         if "flagship" not in allowed_ctas:
             allowed_ctas.append("flagship")
-        path = "боль -> решение -> 45 дней"
+        path = "боль -> решение -> 60 дней"
         reason = "тема хорошо стыкуется с флагманом, поэтому можно вести ближе к офферу"
 
     return {
@@ -177,7 +177,12 @@ def load_positioning_snapshot() -> str:
 def get_positioning_flags() -> dict:
     return {
         "knowledge_base_version": get_active_knowledge_version(),
-        "flagship_offer": "Бизнес без потерь — 45 рабочих дней на устранение управленческих потерь",
+        "flagship_offer": "«Бизнес без потерь» — 60-дневный спринт (400К)",
+        "diagnostics_price": "30 000 ₽",
+        "mini_sprint_price": "150 000 ₽",
+        "support_standard_price": "90 000 ₽/мес",
+        "support_plus_price": "150 000 ₽/мес",
+        "pro_offer": "«Бизнес без потерь» PRO — 120 дней (800К)",
         "market_language": ["потери", "контроль", "прибыль", "плавающая прибыль", "узкие места", "зависимость от собственника"],
         "primary_segment": "сервисный бизнес 60-150 млн ₽",
         "priority_pillars": [
@@ -200,9 +205,9 @@ def get_positioning_flags() -> dict:
         "cta_balance_ranges": CTA_BALANCE_RANGES,
         "flagship_keywords": list(FLAGSHIP_KEYWORDS),
         "cta_matrix_overview": {
-            "trust": "контент -> доверие -> диагностика -> 45 дней",
-            "problem_aware": "симптом -> диагностика -> разбор перекоса -> 45 дней",
-            "solution_aware": "деньги и потери -> диагностика/разбор -> 45 дней",
-            "offer_push": "боль -> решение -> 45 дней",
+            "trust": "контент -> доверие -> диагностика -> 60 дней",
+            "problem_aware": "симптом -> диагностика -> разбор перекоса -> 60 дней",
+            "solution_aware": "деньги и потери -> диагностика/разбор -> 60 дней",
+            "offer_push": "боль -> решение -> 60 дней",
         },
     }

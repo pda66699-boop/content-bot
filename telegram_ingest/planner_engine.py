@@ -651,7 +651,7 @@ def classify_post_rubric(row: dict) -> str:
         return "diagnostic_entry"
     if role in {"image", "reflective", "personal", "conversation"} or any(token in theme for token in CONVERSATIONAL_THEME_TOKENS):
         return "reflective_observation"
-    if any(token in theme for token in ("45 дней", "стабилизац", "потер", "контрол", "управляем")):
+    if any(token in theme for token in ("60 дней", "стабилизац", "потер", "контрол", "управляем")):
         return "flagship_warmup"
     return "expert_explainer"
 
@@ -885,7 +885,7 @@ def enrich_candidate_with_balance(candidate: TopicCandidate, feed_state: dict, c
     if campaign_reason:
         why_now = f"{why_now}; {campaign_reason}"
     if flagship_fit["score"] >= 10 and candidate.content_pillar != "conversational":
-        why_now = f"{why_now}; тема хорошо поддерживает флагман «45 дней»"
+        why_now = f"{why_now}; тема хорошо поддерживает флагман «60 дней»"
     if raw_rubric_bonus > 0:
         why_now = f"{why_now}; такого формата сейчас не хватает в ленте"
     if raw_format_bonus > 0:
