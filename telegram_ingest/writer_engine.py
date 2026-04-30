@@ -445,6 +445,15 @@ def infer_post_format(theme: str, angle: str, content_role: str, business_goal: 
     return "explainer"
 
 
+def infer_post_type(theme: str) -> str:
+    """Infer post_type from theme text when topic_brief does not provide one."""
+    t = theme.lower()
+    personal_markers = ["я не строю", "я ищу", "почему я", "мой взгляд", "я заметил", "я не делаю", "я выбираю"]
+    if any(m in t for m in personal_markers):
+        return "personal_insight"
+    return ""
+
+
 def infer_profile(theme: str) -> dict:
     normalized_theme = theme.lower()
     if all(token in normalized_theme for token in ("ии", "процесс")) or (
@@ -1281,6 +1290,8 @@ def generate_drafts(
         LOGGER.warning("core_idea generation skipped or failed — drafts will use soft prompt guidance only")
 
     post_type = (topic_brief or {}).get("post_type") or ""
+    if not post_type:
+        post_type = infer_post_type(context.theme)
     LOGGER.info("generate_drafts: post_type=%s theme=%r", post_type or "(none)", context.theme)
 
     _MAX_ARTIFACT_RETRIES = 2
