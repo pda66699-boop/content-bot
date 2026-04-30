@@ -195,6 +195,7 @@ def maybe_generate_writer_drafts(payload: dict, count: int = 2) -> list[dict] | 
     system_prompt = preamble + "\n\n" + system_prompt
 
     char_limit = _char_limit_for_type(post_type)
+    char_min = max(700, int(char_limit * 0.7)) if post_type == "personal_insight" else int(char_limit * 0.7)
     post_type_instruction = (
         f"ТИП ПОСТА: {post_type} — писать строго по шаблону этого типа. "
         if post_type
@@ -216,8 +217,10 @@ def maybe_generate_writer_drafts(payload: dict, count: int = 2) -> list[dict] | 
                 + core_idea_constraint
                 + "ОБЯЗАТЕЛЬНО: пост заканчивается ровно ОДНОЙ финальной фразой-выводом. "
                 "НЕТ 'Итог:', НЕТ 'Жёсткий вывод:' после уже написанного вывода — пост не пересказывает себя в конце. "
-                f"ОБЯЗАТЕЛЬНО: длина текста не более {char_limit} знаков с пробелами. "
-                "Если длиннее — сократить: убрать вводные обороты, убрать повторы мысли, оставить 3 пункта списка вместо 5."
+                f"ОБЯЗАТЕЛЬНО: длина текста от {char_min} до {char_limit} знаков с пробелами. "
+                "Пост считается незавершённым если короче минимума. "
+                f"Если пост короче {char_min} знаков — дописать: добавить конкретную сцену или наблюдение из практики. "
+                f"Если длиннее {char_limit} — сократить: убрать вводные обороты, убрать повторы мысли, оставить 3 пункта списка вместо 5."
             ),
             "required_output_format": {
                 "drafts": [
