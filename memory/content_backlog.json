@@ -1,29 +1,87 @@
 [
   {
-    "theme": "как честное признание проблемы и пересборка стандартов спасают бренд и экономику",
+    "theme": "Кейс Паши (IT-интегратор, Bitrix24)",
+    "desired_pillar": "case",
+    "status": "pending_data",
+    "source": "client_case",
+    "created_at": "2026-05-01",
+    "notes": "Публиковать когда оформишь с цифрами",
+    "context": {
+      "source_kind": "client_case",
+      "case_query": "IT-интегратор Bitrix24",
+      "post_type": "case",
+      "condition": "нужны реальные данные и цифры"
+    }
+  },
+  {
+    "theme": "Что такое RACI и зачем это в сервисе",
+    "desired_pillar": "pain_breakdown",
+    "status": "saved",
+    "source": "backlog",
+    "created_at": "2026-05-01",
+    "notes": "Готов к генерации через бот",
+    "context": {
+      "source_kind": "backlog",
+      "post_type": "pain_breakdown",
+      "condition": "готов сразу"
+    }
+  },
+  {
+    "theme": "Контрольная точка vs ручной контроль — в чём разница",
+    "desired_pillar": "pain_breakdown",
+    "status": "saved",
+    "source": "backlog",
+    "created_at": "2026-05-01",
+    "notes": "Готов к генерации через бот",
+    "context": {
+      "source_kind": "backlog",
+      "post_type": "pain_breakdown",
+      "condition": "готов сразу"
+    }
+  },
+  {
+    "theme": "Сколько стоит одна текучка ключевого сотрудника",
     "desired_pillar": "money",
+    "status": "saved",
+    "source": "backlog",
+    "created_at": "2026-05-01",
+    "notes": "Готов к генерации через бот",
+    "context": {
+      "source_kind": "backlog",
+      "post_type": "loss_calculator",
+      "condition": "готов сразу"
+    }
+  },
+  {
+    "theme": "Springfield Remanufacturing — финансовая прозрачность как рост",
+    "desired_pillar": "authority_breakdown",
+    "status": "saved",
+    "source": "backlog",
+    "created_at": "2026-05-01",
+    "notes": "Готов к генерации через бот",
+    "context": {
+      "source_kind": "verified_case",
+      "case_query": "Springfield Remanufacturing",
+      "post_type": "authority_breakdown",
+      "condition": "готов сразу"
+    }
+  },
+  {
+    "theme": "Как честное признание проблемы и пересборка стандартов спасают бренд",
+    "desired_pillar": "authority_breakdown",
     "status": "saved",
     "source": "case_research",
     "created_at": "2026-03-15",
-    "notes": "Угол: разобрать системную пересборку продукта, стандартов и контроля\nПочему брать: есть явная системная польза\nЭффект: рост продаж",
+    "notes": "Уже был на канале (февраль 2026) — в бэклог для повторного цикла",
     "context": {
       "source_kind": "verified_case",
       "case_query": "Domino's",
+      "post_type": "authority_breakdown",
       "fit_reason": "есть явная системная польза",
       "post_angle": "разобрать системную пересборку продукта, стандартов и контроля",
-      "what_is_confirmed": [
-        "кризис качества",
-        "пересборка стандартов"
-      ],
-      "measurable_outcomes": [
-        "рост продаж"
-      ],
-      "sources": [
-        {
-          "title": "Reuters",
-          "url": "https://example.com"
-        }
-      ]
+      "what_is_confirmed": ["кризис качества", "пересборка стандартов"],
+      "measurable_outcomes": ["рост продаж 14%", "рост акций 130% за год"],
+      "condition": "повторный цикл"
     }
   }
 ]
